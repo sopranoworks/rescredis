@@ -1435,22 +1435,28 @@ class SortedSetCommandsSpec extends AnyWordSpec
       "return all elements" taggedAs (V280) in {
         val elements = ListBuffer[(String, Score)]()
         var cursor = 0L
-        do {
+        val (next, set) = client.zScan[String]("SSET", cursor).!
+        elements ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.zScan[String]("SSET", cursor).!
           elements ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         elements.toList should contain theSameElementsInOrderAs fullList
       }
       Given("that a pattern is set")
       "return all matching elements" taggedAs (V280) in {
         val elements = ListBuffer[(String, Score)]()
         var cursor = 0L
-        do {
+        val (next, set) = client.zScan[String]("SSET", cursor, matchOpt = Some("foo*")).!
+        elements ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.zScan[String]("SSET", cursor, matchOpt = Some("foo*")).!
           elements ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         elements.toList should contain theSameElementsInOrderAs fullList.filter {
           case (value, score) => value.startsWith("foo")
         }
@@ -1459,14 +1465,20 @@ class SortedSetCommandsSpec extends AnyWordSpec
       "return all matching elements in one iteration" taggedAs (V280) in {
         val elements = ListBuffer[(String, Score)]()
         var cursor = 0L
-        do {
+        val (next, set) = client.zScan[String](
+          "SSET", cursor, matchOpt = Some("foo*"), countOpt = Some(100)
+        ).!
+        set.size should be(10)
+        elements ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.zScan[String](
             "SSET", cursor, matchOpt = Some("foo*"), countOpt = Some(100)
           ).!
-          set.size should be (10)
+          set.size should be(10)
           elements ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         elements.toList should contain theSameElementsInOrderAs fullList.filter {
           case (value, score) => value.startsWith("foo")
         }

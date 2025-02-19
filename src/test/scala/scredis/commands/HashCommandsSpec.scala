@@ -391,26 +391,32 @@ class HashCommandsSpec extends AnyWordSpec
       "return all fields" taggedAs (V280) in {
         val elements = ListBuffer[(String, String)]()
         var cursor = 0L
-        do {
+        val (next, list) = client.hScan[String]("HASH", cursor).!
+        elements ++= list
+        cursor = next
+        while (cursor > 0) {
           val (next, list) = client.hScan[String]("HASH", cursor).!
           elements ++= list
           cursor = next
         }
-        while (cursor > 0)
         elements.toList should contain theSameElementsAs all
       }
       Given("that a pattern is set")
       "return all matching fields" taggedAs (V280) in {
         val elements = ListBuffer[(String, String)]()
         var cursor = 0L
-        do {
+        val (next, list) = client.hScan[String](
+          "HASH", cursor, matchOpt = Some("foo*")
+        ).!
+        elements ++= list
+        cursor = next
+        while (cursor > 0) {
           val (next, list) = client.hScan[String](
             "HASH", cursor, matchOpt = Some("foo*")
           ).!
           elements ++= list
           cursor = next
         }
-        while (cursor > 0)
         elements.toList should contain theSameElementsAs (all.filter {
           case (key, value) => key.startsWith("foo")
         })
@@ -419,7 +425,13 @@ class HashCommandsSpec extends AnyWordSpec
       "return all matching fields in one iteration" taggedAs (V280) in {
         val elements = ListBuffer[(String, String)]()
         var cursor = 0L
-        do {
+        val (next, list) = client.hScan[String](
+          "HASH", cursor, matchOpt = Some("foo*"), countOpt = Some(100)
+        ).!
+        list should have size (10)
+        elements ++= list
+        cursor = next
+        while (cursor > 0) {
           val (next, list) = client.hScan[String](
             "HASH", cursor, matchOpt = Some("foo*"), countOpt = Some(100)
           ).!
@@ -427,7 +439,6 @@ class HashCommandsSpec extends AnyWordSpec
           elements ++= list
           cursor = next
         }
-        while (cursor > 0)
         elements.toList should contain theSameElementsAs (all.filter {
           case (key, value) => key.startsWith("foo")
         })

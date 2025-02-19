@@ -618,11 +618,14 @@ class KeyCommandsSpec extends AnyWordSpec
       "return all keys" taggedAs (V280) in {
         val keys = ListBuffer[String]()
         var cursor = 0L
-        do {
+        val (next, set) = client.scan(cursor).!
+        keys ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.scan(cursor).!
           keys ++= set
           cursor = next
-        } while (cursor > 0)
+        }
 
         keys.toList should contain theSameElementsAs fullList
       }
@@ -630,25 +633,34 @@ class KeyCommandsSpec extends AnyWordSpec
       "return all matching keys" taggedAs (V280) in {
         val keys = ListBuffer[String]()
         var cursor = 0L
-        do {
+        val (next, set) = client.scan(cursor, matchOpt = Some("foo*")).!
+        keys ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.scan(cursor, matchOpt = Some("foo*")).!
           keys ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         keys.toList should contain theSameElementsAs fullList.filter(_.startsWith("foo"))
       }
       Given("that a pattern is set and count is set to 100")
       "return all matching keys in one iteration" taggedAs (V280) in {
         val keys = ListBuffer[String]()
         var cursor = 0L
-        do {
+        val (next, set) = client.scan(
+          cursor, matchOpt = Some("foo*"), countOpt = Some(100)
+        ).!
+        set.size should be(10)
+        keys ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.scan(
             cursor, matchOpt = Some("foo*"), countOpt = Some(100)
           ).!
-          set.size should be (10)
+          set.size should be(10)
           keys ++= set
           cursor = next
-        } while (cursor > 0)
+        }
 
         keys.toList should contain theSameElementsAs fullList.filter(_.startsWith("foo"))
       }

@@ -54,7 +54,7 @@ class ClusterCommandsSpec extends AnyWordSpec
   ClusterGetKeysInSlot.toString should {
     // TODO the command is node-specific. Find a better test, or implement s.t. it talks to the correct node.
     "succeed" ignore {
-      forAll(slots) { slot: Long =>
+      forAll(slots) { (slot: Long) =>
         val keysInSlot = cluster.clusterGetKeysInSlot(slot,1)
         keysInSlot.isReadyWithin(1.seconds)
       }
@@ -98,7 +98,7 @@ class ClusterCommandsSpec extends AnyWordSpec
 
     "using an arbitrary id" should {
       "return an error" in {
-        forAll { node: String =>
+        forAll { (node: String) =>
           whenReady(cluster.clusterSlaves(node).failed) { e =>
             e shouldBe a [RedisErrorResponseException]
             e.getMessage should include ("Unknown node")

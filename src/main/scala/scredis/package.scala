@@ -9,10 +9,10 @@ import scala.collection.immutable.HashSet
 package object scredis {
   private var poolNumber = 0
   
-  private[scredis] def newPoolNumber: Int = synchronized {
-    poolNumber += 1
-    poolNumber
-  }
+//  private[scredis] def newPoolNumber: Int = synchronized {
+//    poolNumber += 1
+//    poolNumber
+//  }
   
   implicit val stringReader: Reader[String] = UTF8StringReader
   

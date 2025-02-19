@@ -34,10 +34,10 @@ object ClientInitializationExample {
   import org.apache.pekko.actor.ActorSystem
 
   // Defines an actor system to use with the client
-  implicit val system = ActorSystem("my-actor-system")
+  implicit val system: ActorSystem = ActorSystem("my-actor-system")
 
   // Creates a non-blocking client with default configuration (see reference.conf)
-  val client = Client()
+  val client: Client = Client()
 
   // Creates a non-blocking client with provided parameters, falling back to default
   // configuration for non-provided parameters.
@@ -65,7 +65,7 @@ object ClientExample {
   import scala.util.{ Success, Failure }
 
   // Defines an actor system to use with the client
-  implicit val system = ActorSystem("my-actor-system")
+  implicit val system: ActorSystem = ActorSystem("my-actor-system")
 
   // Creates a non-blocking client with default configuration (see reference.conf)
   val client = Client()

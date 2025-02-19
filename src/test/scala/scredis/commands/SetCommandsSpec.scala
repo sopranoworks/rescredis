@@ -640,36 +640,48 @@ class SetCommandsSpec extends AnyWordSpec
       "return all elements" taggedAs (V280) in {
         val elements = ListBuffer[String]()
         var cursor = 0L
-        do {
+        val (next, set) = client.sScan[String]("SSET", cursor).!
+        elements ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.sScan[String]("SSET", cursor).!
           elements ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         elements.toList should contain theSameElementsAs fullList
       }
       Given("that a pattern is set")
       "return all matching elements" taggedAs (V280) in {
         val elements = ListBuffer[String]()
         var cursor = 0L
-        do {
+        val (next, set) = client.sScan[String]("SSET", cursor, matchOpt = Some("foo*")).!
+        elements ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.sScan[String]("SSET", cursor, matchOpt = Some("foo*")).!
           elements ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         elements.toList should contain theSameElementsAs fullList.filter(_.startsWith("foo"))
       }
       Given("that a pattern is set and count is set to 100")
       "return all matching elements in one iteration" taggedAs (V280) in {
         val elements = ListBuffer[String]()
         var cursor = 0L
-        do {
+        val (next, set) = client.sScan[String](
+          "SSET", cursor, matchOpt = Some("foo*"), countOpt = Some(100)
+        ).!
+        set.size should be(10)
+        elements ++= set
+        cursor = next
+        while (cursor > 0) {
           val (next, set) = client.sScan[String](
             "SSET", cursor, matchOpt = Some("foo*"), countOpt = Some(100)
           ).!
-          set.size should be (10)
+          set.size should be(10)
           elements ++= set
           cursor = next
-        } while (cursor > 0)
+        }
         elements.toList should contain theSameElementsAs fullList.filter(_.startsWith("foo"))
       }
     }

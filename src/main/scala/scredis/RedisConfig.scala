@@ -47,7 +47,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
   }
 
   object Redis {
-    private implicit val config = mergedConfig.getConfig("redis")
+    private implicit val config: Config = mergedConfig.getConfig("redis")
     val Host = config.getString("host")
     val Port = config.getInt("port")
 
@@ -78,7 +78,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
   }
   
   object IO {
-    private implicit val config = mergedConfig.getConfig("io")
+    private implicit val config: Config = mergedConfig.getConfig("io")
     val ConnectTimeout = parseFiniteDuration("connect-timeout")
     val ReceiveTimeoutOpt = optionally("receive-timeout") {
       parseFiniteDuration("receive-timeout")
@@ -89,7 +89,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
     val TCPReceiveBufferSizeHint = config.getInt("tcp-receive-buffer-size-hint")
     
     object Akka {
-      private implicit val config = IO.config.getConfig("akka")
+      private implicit val config: Config = IO.config.getConfig("pekko")
       val ActorSystemName = config.getString("actor-system-name")
       val IODispatcherPath = config.getString("io-dispatcher-path")
       val ListenerDispatcherPath = config.getString("listener-dispatcher-path")
@@ -97,7 +97,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
     }
 
     object Cluster {
-      private implicit val config = IO.config.getConfig("cluster")
+      private implicit val config: Config = IO.config.getConfig("cluster")
 
       val TryAgainWait = parseFiniteDuration("try-again-wait")
       val ClusterDownWait = parseFiniteDuration("clusterdown-wait")
@@ -105,13 +105,13 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
   }
   
   object Global {
-    private implicit val config = mergedConfig.getConfig("global")
+    private implicit val config: Config = mergedConfig.getConfig("global")
     val MaxConcurrentRequestsOpt = optionally("max-concurrent-requests") {
       config.getInt("max-concurrent-requests")
     }
     val FailCommandOnConnecting = config.getBoolean("fail-command-on-connecting")
     object EncodeBufferPool {
-      private implicit val config = Global.config.getConfig("encode-buffer-pool")
+      private implicit val config: Config = Global.config.getConfig("encode-buffer-pool")
       val PoolMaxCapacity = config.getInt("pool-max-capacity")
       val BufferMaxSize = config.getInt("buffer-max-size")
     }
