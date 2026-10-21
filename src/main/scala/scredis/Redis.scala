@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, configuration per build variant.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant.
 package scredis
 
 import akka.actor._
@@ -67,7 +67,8 @@ class Redis private[scredis] (
   with ScriptingCommands
   with HyperLogLogCommands
   with PubSubCommands
-  with TransactionCommands {
+  with TransactionCommands
+  with JsonCommands {
   
   private var shouldShutdownBlockingClient = false
   private var shouldShutdownSubscriberClient = false

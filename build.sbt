@@ -20,6 +20,9 @@ val pekkoV = "1.7.1"
 val loggingV = "3.9.6"
 val collectionCompatV = "2.14.0"
 val typesafeConfigV = "1.4.9"
+// circe: the lowest 0.14.x that builds and passes the suite on 2.12, 2.13 and 3; a newer 0.14.x is binary
+// compatible (-Dcirce.version=... runs the build against another one)
+val circeV = sys.props.getOrElse("circe.version", "0.14.0")
 
 // The sources of both artifacts are in the repository root, not below the module directories
 val repoRoot = file(".").getCanonicalFile
@@ -55,6 +58,8 @@ lazy val common = Seq(
     "com.typesafe.scala-logging" %% "scala-logging" % loggingV,
     "com.typesafe" % "config" % typesafeConfigV,
     "org.scala-lang.modules" %% "scala-collection-compat" % collectionCompatV,
+    "io.circe" %% "circe-core" % circeV,
+    "io.circe" %% "circe-parser" % circeV,
 
     "org.scalatest" %% "scalatest" % "3.2.20" % Test,
     "org.scalatestplus" %% "scalacheck-1-20" % "3.2.20.0" % Test,

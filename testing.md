@@ -8,6 +8,11 @@ production runs:
 * `6380`: configured by `src/test/resources/redis-6380.conf` (password `foobar`, ACL user `tester`)
 * `7000`-`7005`: Redis cluster (3 masters, 3 replicas)
 
+6379 and 6380 have the Redis Stack modules loaded; every cluster node has the JSON module (`ReJSON`) loaded,
+because `JsonCommandsSpec` runs through `RedisCluster`. `./docker-redis.sh status` prints `MODULE LIST` of every port.
+The JSON tests are tagged `RedisJson` (`-l RedisJson` skips them on a server without the module).
+The circe version the build uses can be changed for a run: `./docker-redis.sh test -Dcirce.version=0.14.17 "+test"`.
+
 Docker must be running. From the repository root:
 
     ./docker-redis.sh start             # start the servers

@@ -11,8 +11,10 @@
 #   * 6380          server configured by src/test/resources/redis-6380.conf (requirepass foobar,
 #                   user tester/secretpass), same modules
 #   * 7000 - 7005   Redis cluster (3 masters, 3 replicas), no password. Same image and same
-#                   server binary, started without the modules (the suite does not use them
-#                   and the modules are not meant for cluster nodes started by hand)
+#                   server binary, with the JSON module (rejson.so) loaded on every node: the
+#                   JSON tests run through RedisCluster. The other Redis Stack modules are not
+#                   loaded (the suite does not use them on the cluster, and RediSearch and
+#                   RedisGears need a coordinator setup of their own in cluster mode)
 #
 # All containers share one network namespace (owned by the first one), so every server is
 # reachable as 127.0.0.1 from every other one and from the test container. The suite relies on
@@ -63,6 +65,7 @@ start() {
         mkdir -p /data/$p
         /opt/redis-stack/bin/redis-server --port $p --dir /data/$p --bind 0.0.0.0 --protected-mode no \
           --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 \
+          --loadmodule /opt/redis-stack/lib/rejson.so \
           --appendonly yes --daemonize yes >/dev/null
       done
       until redis-cli -p 7005 ping >/dev/null 2>&1; do sleep 0.2; done
@@ -103,7 +106,8 @@ status() {
     set -- $spec
     auth=()
     if [ "$2" = 6380 ]; then auth=(-a foobar --no-auth-warning); fi
-    echo "$1 :$2 $(docker exec "$1" redis-cli -p "$2" ${auth[@]+"${auth[@]}"} info server 2>/dev/null | grep -m1 redis_version | tr -d '\r')"
+    echo "$1 :$2 $(docker exec "$1" redis-cli -p "$2" ${auth[@]+"${auth[@]}"} info server 2>/dev/null | grep -m1 redis_version | tr -d '\r')" \
+      "modules: $(docker exec "$1" redis-cli -p "$2" ${auth[@]+"${auth[@]}"} module list 2>/dev/null | tr -d '\r' | awk '/^name$/ {getline; printf "%s ", $0}')"
   done
 }
 

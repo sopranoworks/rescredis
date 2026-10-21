@@ -29,6 +29,7 @@ rescredis 1.0.0 = scredis 2.4.3 (upstream tag `v2.4.3`, commit `2e1928d7a961856d
 * `Redis.auth(password, username)` passes the user name to every client it owns.
 * Scala 3 support.
 * The Apache Pekko artifact.
+* JSON commands for Redis Stack (the code of scredis-json 1.0.1, see "JSON").
 
 Upstream features added after 2.4.3 (`SMISMEMBER`, stream commands) are not included.
 
@@ -43,6 +44,7 @@ Upstream features added after 2.4.3 (`SMISMEMBER`, stream commands) are not incl
   * Tracked Subscribe and Unsubscribe commands (they return a Future as any other commands)
   * Automatically resubscribes to previously subscribed channels/patterns upon reconnection
 * Cluster support via `RedisCluster`
+* JSON commands (Redis Stack / RedisJSON) on `Client`, `Redis` and `RedisCluster`: `client.Json.set(...)`
 * Customizable serialization and deserialization of command inputs and outputs
 * Fully configurable
   * Akka or Pekko dispatchers
@@ -132,6 +134,74 @@ redis.subscriber.unsubscribe("My Channel")
 // Shutdown all initialized internal clients along with the ActorSystem
 redis.quit()
 ```
+
+## JSON
+
+The JSON commands of Redis Stack (the RedisJSON module) are part of `Client`, `Redis` and `RedisCluster`, under
+`Json`: `client.Json.set(key, path, value)`, `client.Json.get[T](key)`, ... All of these exist: `set`, `setNX`,
+`setXX`, `get`, `merge`, `del`, `toggle`, `clear`, `types`, `strLen`, `strAppend`, `numIncBy`, `mSet`, `mGet`,
+`objLen`, `objKeys`, `arrAppend`, `arrIndex`, `arrInsert`, `arrLen`, `arrPop`, `arrTrim` and `debugMemory`, plus the
+variants whose names end in `Raw` (`setRaw`, `setRawNX`, `setRawXX`, `getRaw`, `mergeRaw`, `mSetRaw`, `mGetRaw`,
+`arrAppendRaw`, `arrIndexRaw`, `arrInsertRaw`, `arrPopRaw`), which take a `Writer` or return the circe `Json`.
+They need a server with the JSON module (Redis Stack; RedisJSON 2.6 or later for `merge` and `mSet`); on a plain
+Redis they fail with an error reply.
+
+```scala
+import io.circe.generic.auto._   // or your own circe Encoder / Decoder (circe-generic is not a dependency of rescredis)
+import scala.concurrent.ExecutionContext.Implicits.global
+
+case class User(name: String, score: Int)
+
+val client = Client()                                  // or Redis(), or RedisCluster(Server("localhost", 7000))
+for {
+  _    <- client.Json.set("user:1", "$", User("alice", 10))   // Future[Boolean]
+  user <- client.Json.get[User]("user:1")                     // Future[Option[User]]
+  _    <- client.Json.numIncBy("user:1", "$.score", 5)        // Future[List[Option[Long]]]
+} yield user
+```
+
+* The values are converted with [circe](https://circe.github.io/circe/): the methods without `Raw` take an
+  `io.circe.Encoder` or `io.circe.Decoder`; the `Raw` ones take a `scredis.serialization.Writer` (for circe's `Json`
+  use `import scredis.serialization.JsonImplicits._`) and return `io.circe.Json`.
+* **circe.** rescredis depends on `circe-core` and `circe-parser` 0.14.0, the lowest 0.14 release, with no version
+  range. circe 0.14 is binary compatible within the line, so a newer 0.14.x on your classpath is used
+  instead (the suite is also run with 0.14.17). `circe-generic` is not a dependency; add it if you derive codecs.
+* Inside `package scredis`, `io.circe` means `scredis.io.circe`: write `_root_.io.circe` there.
+* `RedisCluster`: `mGet` and `mSet` go to the node of the first key, like `MGET` and `MSET`: all keys must be in one
+  hash slot (use a hash tag, `{user}:1`).
+* `numIncBy` returns integers: if the new value is not an integer the future fails (the server has applied the increment).
+  `JSON.NUMMULTBY` (deprecated by RedisJSON) is not included.
+
+### Migrating from scredis-json
+
+scredis-json 1.0.1 (`com.sopranoworks %% scredis-json`, whose code is now part of rescredis) copied `Redis`,
+`RedisCluster` and `Client` to add the commands. Replace the class; `x.Json.<command>(...)` is unchanged (names,
+parameters, defaults, result types):
+
+| scredis-json | rescredis |
+|---|---|
+| `RedisJson` (`RedisJson(...)`, `RedisJson.withActorSystem(...)`) | `Redis` (`Redis(...)`, `Redis.withActorSystem(...)`): same parameters, defaults and ActorSystem handling |
+| `RedisJsonCluster` | `RedisCluster`: same parameters and defaults |
+| `JsonClient` | `Client`: same parameters and defaults |
+| `scredis.serialization.JsonImplicits`, `JsonWriter` | the same names |
+
+The differences a caller can see:
+
+* The all-parameters constructors `new RedisJson(systemOrName = ..., host = ...)` and `new RedisJsonCluster(nodes = ...)`
+  were public; those of `Redis` and `RedisCluster` are `private[scredis]`. Use `Redis(...)` / `Redis.withActorSystem(...)` and
+  `RedisCluster(...)`, which take the same arguments.
+* Dependencies: the artifact is `rescredis` (or `rescredis-pekko`), not `scredis-json` plus `com.github.scredis:scredis`;
+  the two cannot be on one classpath. The licence is Apache-2.0 (scredis-json declared MIT).
+* The bug fixes below change what some calls return.
+
+Bug fixes in the JSON commands (all covered by tests that fail without them):
+
+* `strAppend` built the JSON string with its own quote handling, which read a backslash as the start of an escape: a
+  backslash in the value changed or broke the string. The value is now appended as it is.
+* `arrIndex` / `arrIndexRaw` ignored the `Writer` of the value.
+* `mGet` and `mSet` failed on `RedisCluster` ("This command is not supported for clusters").
+* `numIncBy` returned an empty list for a legacy path (`.field`) and for a result that is not an integer.
+* `types` failed for a key that does not exist; it returns an empty list.
 
 ## Tests and Redis versions
 

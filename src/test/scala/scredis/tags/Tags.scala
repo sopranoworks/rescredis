@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: RedisJson tag added.
 package scredis.tags
 
 import org.scalatest.Tag
@@ -20,3 +21,5 @@ object V2812 extends Tag("V2812")
 object V2813 extends Tag("V2813")
 object V2950 extends Tag("V2950")
 object V300 extends Tag("V300")
+// needs the Redis Stack JSON module (RedisJSON 2.6 or later)
+object RedisJson extends Tag("RedisJson")

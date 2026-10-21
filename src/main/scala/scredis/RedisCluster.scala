@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: JsonCommands mixed in.
 package scredis
 
 import akka.actor.ActorSystem
@@ -60,6 +61,7 @@ class RedisCluster private[scredis](
   with SetCommands
   with SortedSetCommands
   with StringCommands
+  with JsonCommands
   //with SubscriberCommands
 {
   override implicit val dispatcher: ExecutionContext =

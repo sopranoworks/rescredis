@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: JsonCommands mixed in.
 package scredis
 
 import akka.actor.ActorSystem
@@ -73,7 +74,8 @@ class Client(
   with ScriptingCommands
   with HyperLogLogCommands
   with PubSubCommands
-  with TransactionCommands {
+  with TransactionCommands
+  with JsonCommands {
 
   /**
    * Constructs a $client instance from a [[scredis.RedisConfig]]
