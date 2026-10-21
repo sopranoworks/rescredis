@@ -1,8 +1,9 @@
-// Modified by Sopranoworks: adapted to Redis 7.4.
+// Modified by Sopranoworks: adapted to Redis 7.4; the ROLE test waits for the replica.
 package scredis.commands
 
 import org.scalatest._
 import org.scalatest.concurrent._
+import org.scalatest.time.{Millis, Seconds, Span}
 import scredis._
 import scredis.exceptions._
 import scredis.protocol.requests.ServerRequests.{CommandInfo, _}
@@ -17,6 +18,7 @@ class ServerCommandsSpec extends AnyWordSpec
   with BeforeAndAfterAll
   with Matchers
   with Inside
+  with Eventually
   with ScalaFutures {
   
   private val client = Client()
@@ -394,7 +396,12 @@ class ServerCommandsSpec extends AnyWordSpec
     "querying a master database" should {
       "return the master role" taggedAs (V2812) in {
         client1.slaveOf("127.0.0.1", 6379).futureValue should be (())
-        Thread.sleep(2000)
+        // ROLE lists a replica once it is online; the master delays starting the sync (repl-diskless-sync-delay)
+        eventually(timeout(Span(30, Seconds)), interval(Span(250, Millis))) {
+          inside(client.role().futureValue) {
+            case scredis.Role.Master(_, slaves) => slaves should not be empty
+          }
+        }
         val role = client.role().futureValue
         role shouldBe a [scredis.Role.Master]
         inside(role) {

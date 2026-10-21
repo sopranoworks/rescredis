@@ -1,10 +1,9 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.protocol
 
 import java.nio.{Buffer, ByteBuffer}
 import java.util.concurrent.Semaphore
 
-import org.apache.pekko.actor.ActorRef
+import akka.actor.ActorRef
 import com.typesafe.scalalogging.LazyLogging
 import scredis._
 import scredis.exceptions._

@@ -1,7 +1,6 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.util
 
-import org.apache.pekko.actor.ActorSystem
+import akka.actor.ActorSystem
 
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, Future}

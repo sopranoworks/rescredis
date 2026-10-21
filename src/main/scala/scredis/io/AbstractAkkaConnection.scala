@@ -1,9 +1,9 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth).
 package scredis.io
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
-import org.apache.pekko.actor._
+import akka.actor._
 import com.typesafe.scalalogging.LazyLogging
 import scredis.protocol.{AuthConfig, Request}
 import scredis.protocol.requests.ConnectionRequests.{Auth, Quit, Select}

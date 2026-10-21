@@ -52,7 +52,7 @@ start() {
       mkdir -p /data/6380 && cd /opt/redis-stack
       /opt/redis-stack/bin/redis-server /conf/redis-6380.conf --dir /data/6380 --bind 0.0.0.0 --daemonize no $MODULES &
       mkdir -p /data/6379
-      exec /opt/redis-stack/bin/redis-server --dir /data/6379 --bind 0.0.0.0 --protected-mode no --daemonize no --repl-diskless-sync-delay 0 $MODULES" \
+      exec /opt/redis-stack/bin/redis-server --dir /data/6379 --bind 0.0.0.0 --protected-mode no --daemonize no $MODULES" \
     >/dev/null
 
   docker run -d --rm --name "$CLUSTER_NAME" --network "container:$SINGLE_NAME" \

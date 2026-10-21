@@ -1,9 +1,9 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: adapted to Redis 7.4 (skipping reply fields).
 package scredis.protocol
 
 import java.nio.ByteBuffer
 
-import org.apache.pekko.util.ByteString
+import akka.util.ByteString
 import scredis.exceptions._
 import scredis.serialization.Reader
 import scredis.{ClusterSlotRange, ClusterSlotRangeNodeInfo, Server}

@@ -1,8 +1,8 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: Scala 3 compatibility.
 package scredis.protocol
 
 
-import org.apache.pekko.util.ByteString
+import akka.util.ByteString
 import org.scalacheck.Gen
 import org.scalatest._
 import org.scalatestplus.scalacheck.ScalaCheckDrivenPropertyChecks

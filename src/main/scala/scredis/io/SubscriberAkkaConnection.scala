@@ -1,9 +1,8 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.io
 
 import java.util.concurrent.Semaphore
 
-import org.apache.pekko.actor._
+import akka.actor._
 import scredis.Subscription
 import scredis.exceptions.RedisIOException
 import scredis.protocol._

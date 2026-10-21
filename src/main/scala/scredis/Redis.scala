@@ -1,12 +1,12 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, configuration per build variant.
 package scredis
 
-import org.apache.pekko.actor._
+import akka.actor._
 import com.typesafe.config.Config
 import scredis.commands._
 import scredis.io.AkkaNonBlockingConnection
 import scredis.protocol.AuthConfig
-import scredis.util.{AkkaConfigCompat, UniqueNameGenerator}
+import scredis.util.{ConfigVariant, UniqueNameGenerator}
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
@@ -39,7 +39,7 @@ class Redis private[scredis] (
 ) extends AkkaNonBlockingConnection(
   system = systemOrName match {
     case Left(system) => system
-    case Right(name) => AkkaConfigCompat.createActorSystem(UniqueNameGenerator.getUniqueName(name))
+    case Right(name) => ConfigVariant.createActorSystem(UniqueNameGenerator.getUniqueName(name))
   },
   host = host,
   port = port,
@@ -249,6 +249,7 @@ class Redis private[scredis] (
    *       (`AUTH ""` is refused by Redis 6.2 and later when no password is set.)
    *
    * @param password the server password
+   * @param username the ACL user name, if any; it is used for every client owned by this $redis
    * @throws $e if authentication failed
    *
    * @since 1.0.0
@@ -256,7 +257,7 @@ class Redis private[scredis] (
   override def auth(password: String, username: Option[String]): Future[Unit] = {
     if (shouldShutdownBlockingClient) {
       try {
-        blocking.auth(password)(defaultBlockingTimeout)
+        blocking.auth(password, username)(defaultBlockingTimeout)
       } catch {
         case e: Throwable => logger.error("Could not authenticate blocking client", e)
       }
@@ -269,7 +270,7 @@ class Redis private[scredis] (
     future.recover {
       case e: Throwable => logger.error("Could not authenticate subscriber client", e)
     }.flatMap { _ =>
-      super.auth(password)
+      super.auth(password, username)
     }
   }
   

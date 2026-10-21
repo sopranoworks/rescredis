@@ -1,4 +1,3 @@
-<!-- Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3. -->
 ## Configuration
 
 Scredis uses the [Typesafe Config Library](https://github.com/typesafehub/config). The list of parameters you can tweak can be seen in **reference.conf** below.
@@ -46,18 +45,18 @@ scredis {
     # buffer, in bytes
     tcp-receive-buffer-size-hint = 500000
     
-    pekko {
+    akka {
       # Name of the actor system created by the Redis.scala instance.
       actor-system-name = "scredis"
       
       # Path to the definition of the io dispatcher used by the IOActor
-      io-dispatcher-path = "scredis.io.pekko.io-dispatcher"
+      io-dispatcher-path = "scredis.io.akka.io-dispatcher"
       
       # Path to the definition of the listener dispatcher used by the ListenerActor
-      listener-dispatcher-path = "scredis.io.pekko.listener-dispatcher"
+      listener-dispatcher-path = "scredis.io.akka.listener-dispatcher"
       
       # Path to the definition of the decoder dispatcher used by the DecoderActors
-      decoder-dispatcher-path = "scredis.io.pekko.decoder-dispatcher"
+      decoder-dispatcher-path = "scredis.io.akka.decoder-dispatcher"
       
       io-dispatcher {
         executor = "thread-pool-executor"
@@ -70,7 +69,7 @@ scredis {
       }
       
       decoder-dispatcher {
-        mailbox-type = "org.apache.pekko.dispatch.BoundedMailbox"
+        mailbox-type = "akka.dispatch.BoundedMailbox"
         mailbox-capacity = 1024
         throughput = 1024
       }

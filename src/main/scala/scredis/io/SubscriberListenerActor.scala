@@ -1,7 +1,6 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.io
 
-import org.apache.pekko.util.ByteString
+import akka.util.ByteString
 import scredis.exceptions._
 import scredis.protocol.{AuthConfig, Request, SimpleStringResponse}
 import scredis.protocol.requests.ConnectionRequests.{Auth, Echo, Ping, Quit, Select}

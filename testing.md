@@ -11,7 +11,7 @@ production runs:
 Docker must be running. From the repository root:
 
     ./docker-redis.sh start             # start the servers
-    ./docker-redis.sh test "+test"      # run sbt in a container next to the servers (all Scala versions)
+    ./docker-redis.sh test "+test"      # run sbt in a container next to the servers (both artifacts, all Scala versions)
     ./docker-redis.sh status            # containers, image digest, redis_version of every server
     ./docker-redis.sh stop              # stop the servers
 
@@ -19,3 +19,7 @@ The test container shares the servers' network namespace, so every server is `12
 suite, as it expects (MIGRATE between 6379 and 6380, the cluster's announced addresses, the SLOWLOG
 client address). Restart the servers before a new run: some specs change the state of 6380.
 Other sbt commands work the same way, e.g. `./docker-redis.sh test "testOnly scredis.commands.StringCommandsSpec"`.
+
+The build has two projects, `rescredis` (Akka) and `rescredisPekko` (Pekko, generated from the same
+source, see docs/pekko-generation.md); `test` at the root runs both. One artifact:
+`./docker-redis.sh test "rescredis/test"` or `"rescredisPekko/test"`.

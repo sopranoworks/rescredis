@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: Scala 3 compatibility; Redis 7 ROLE replication states.
 
 import scala.language.implicitConversions
 import scala.concurrent.duration.FiniteDuration

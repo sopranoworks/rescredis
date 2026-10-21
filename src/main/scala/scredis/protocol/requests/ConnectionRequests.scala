@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: Scala 3 compatibility; adapted to Redis 7.4 (auth).
 package scredis.protocol.requests
 
 import scredis.protocol._

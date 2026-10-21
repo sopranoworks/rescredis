@@ -1,9 +1,8 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.io
 
 import java.util.concurrent.locks.ReentrantLock
 
-import org.apache.pekko.actor._
+import akka.actor._
 import scredis.exceptions._
 import scredis.protocol._
 import scredis.util.UniqueNameGenerator

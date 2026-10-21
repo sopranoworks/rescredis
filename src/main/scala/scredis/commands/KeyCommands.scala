@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: documentation fix backported from upstream scredis (52dfd27).
 package scredis.commands
 
 import scala.language.postfixOps

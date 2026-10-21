@@ -1,8 +1,7 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.io
 
-import org.apache.pekko.actor.{Actor, ActorLogging}
-import org.apache.pekko.util.ByteString
+import akka.actor.{Actor, ActorLogging}
+import akka.util.ByteString
 import scredis.PubSubMessage.Message
 import scredis.exceptions.RedisProtocolException
 import scredis.protocol.{ErrorResponse, Protocol, Request}

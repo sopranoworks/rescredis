@@ -1,9 +1,9 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: builds with Scala 2.12 (no digit separator).
 package scredis
 
 import org.scalameter.api._
 import org.scalameter.picklers.Implicits._
-import org.apache.pekko.actor.ActorSystem
+import akka.actor.ActorSystem
 import org.scalameter.execution.SeparateJvmsExecutor
 
 import scala.concurrent.{Await, Future}

@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: tests Redis.auth with an ACL username.
 package scredis
 
 import org.scalatest._
@@ -49,6 +50,31 @@ class RedisSpec extends AnyWordSpec
     }
   }
   
+  "Auth with an ACL username" when {
+    "lazy clients are initialized" should {
+      "authenticate every client as that user" taggedAs (V100) in {
+        val redis = Redis(port = 6380)
+        val admin = Client(port = 6380, authOpt = Some(AuthConfig(None, redisPassword)))
+        try {
+          // initialise the lazy clients before authenticating
+          redis.blocking should not be null
+          redis.subscriber should not be null
+          redis.auth("secretpass", Some("tester")).futureValue should be (())
+          redis.subscriber.subscribe("TEST").futureValue should be (1)
+          redis.blocking.blPop(1, "LIST").get should be (empty)
+          redis.ping().futureValue should be ("PONG")
+
+          // the non-blocking, the blocking and the subscriber connection are all the ACL user
+          val users = admin.clientList().futureValue.flatMap(_.get("user"))
+          users.count(_ == "tester") should be (3)
+        } finally {
+          redis.quit().futureValue
+          admin.quit().futureValue
+        }
+      }
+    }
+  }
+
   "Quit" when {
     "lazy clients are not initialized" should {
       "succeed" taggedAs (V100) in {

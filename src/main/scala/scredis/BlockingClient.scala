@@ -1,7 +1,7 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation).
 package scredis
 
-import org.apache.pekko.actor.ActorSystem
+import akka.actor.ActorSystem
 import com.typesafe.config.Config
 import scredis.commands._
 import scredis.io.AkkaBlockingConnection

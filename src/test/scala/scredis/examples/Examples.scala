@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: Scala 3 compatibility.
 package scredis.examples
 
 import scredis.protocol.AuthConfig
@@ -9,7 +9,7 @@ object BlockingClientExample {
   // #blocking_client_example
 
   import scredis._
-  import org.apache.pekko.actor.ActorSystem
+  import akka.actor.ActorSystem
   import scala.util.{Success, Failure}
 
   // Defines an actor system to use with the blocking client
@@ -32,7 +32,7 @@ object ClientInitializationExample {
   // #client_initialization_example
   import scredis._
   import com.typesafe.config.ConfigFactory
-  import org.apache.pekko.actor.ActorSystem
+  import akka.actor.ActorSystem
 
   // Defines an actor system to use with the client
   implicit val system: ActorSystem = ActorSystem("my-actor-system")
@@ -62,7 +62,7 @@ object ClientInitializationExample {
 object ClientExample {
   // #client_example
   import scredis._
-  import org.apache.pekko.actor.ActorSystem
+  import akka.actor.ActorSystem
   import scala.util.{ Success, Failure }
 
   // Defines an actor system to use with the client

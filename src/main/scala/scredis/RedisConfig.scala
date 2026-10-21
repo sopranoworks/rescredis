@@ -1,10 +1,10 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
+// Modified by Sopranoworks: Scala 3 compatibility; configuration key and normalisation per build variant.
 package scredis
 
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import scredis.protocol.AuthConfig
-import scredis.util.AkkaConfigCompat
+import scredis.util.ConfigVariant
 
 import scala.jdk.CollectionConverters._
 import scala.concurrent.duration._
@@ -19,7 +19,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
   def this(configName: String, path: String) = this(ConfigFactory.load(configName).getConfig(path))
   
   private val referenceConfig = ConfigFactory.defaultReference().getConfig("scredis")
-  private val mergedConfig = AkkaConfigCompat.normaliseScredis(config).withFallback(referenceConfig)
+  private val mergedConfig = ConfigVariant.normaliseScredis(config).withFallback(referenceConfig)
   mergedConfig.checkValid(referenceConfig)
   
   private def optionally[A](key: String)(f: => A)(implicit config: Config): Option[A] = {
@@ -91,7 +91,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
     val TCPReceiveBufferSizeHint = config.getInt("tcp-receive-buffer-size-hint")
     
     object Akka {
-      private implicit val config: Config = IO.config.getConfig("pekko")
+      private implicit val config: Config = IO.config.getConfig(ConfigVariant.IoKey)
       val ActorSystemName = config.getString("actor-system-name")
       val IODispatcherPath = config.getString("io-dispatcher-path")
       val ListenerDispatcherPath = config.getString("listener-dispatcher-path")

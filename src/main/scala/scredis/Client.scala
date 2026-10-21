@@ -1,7 +1,6 @@
-// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis
 
-import org.apache.pekko.actor.ActorSystem
+import akka.actor.ActorSystem
 import com.typesafe.config.Config
 import scredis.commands._
 import scredis.io.AkkaNonBlockingConnection
