@@ -1,4 +1,6 @@
-// Modified by Sopranoworks: added for the Akka configuration compatibility of the Pekko port.
+// Copyright 2026 Sopranoworks
+// SPDX-License-Identifier: Apache-2.0
+// Akka configuration compatibility of the Pekko variant.
 package scredis.util
 
 import com.typesafe.config.{Config, ConfigFactory}

@@ -167,22 +167,28 @@ that exist only in the Akka or only in the Pekko variant. Fixes go into the Akka
 
 ## Documentation
 
-The upstream documentation is at [https://scredis.github.io/scredis/](https://scredis.github.io/scredis/);
-it describes scredis 2.4.3, whose API rescredis has.
+The API documentation is the `-javadoc.jar` published with each artifact. javadoc.io serves published
+javadoc jars at `https://javadoc.io/doc/<groupId>/<artifactId>/<version>`, so for the Akka artifact on Scala 2.13
+it would be `https://javadoc.io/doc/com.sopranoworks/rescredis_2.13/1.0.0` (and `rescredis-pekko_2.13` for
+Pekko); I have not checked that it is available.
 
-Documentation sources are in `src/main/paradox` and are converted with the sbt plugin
-[paradox](https://developer.lightbend.com/docs/paradox/current/index.html): `sbt paradox` writes the
-html files to `target/paradox/site/main`. `gen-doc.sh` generates the documentation and copies it to `./docs`.
+The guide sources are in `src/main/paradox` (upstream's guide for scredis 2.4.3, whose API rescredis has) and
+are converted with the sbt plugin [paradox](https://developer.lightbend.com/docs/paradox/current/index.html):
+`sbt paradox` writes the html files to `target/paradox/site/main`. No generated documentation is committed.
 
 All snippets should be added to `Examples.scala` in test scope and included from the documentation to
 ensure snippets always compile with the latest version.
 
 ## License
 
-Copyright (c) 2013 Livestream LLC. All rights reserved.
+The whole of rescredis is licensed under the Apache License, Version 2.0; see [LICENSE](LICENSE) and
+[NOTICE](NOTICE).
 
-Modifications (rescredis: fixes, Redis 7 compatibility, Apache Pekko variant, Scala 3 support)
-Copyright 2023-2026 Sopranoworks.
+* The code derived from scredis: Copyright (c) 2013 Livestream LLC.
+* The changes (fixes, Redis 7 compatibility, Apache Pekko variant, Scala 3 support) and the files added
+  by Sopranoworks: Copyright 2023-2026 Sopranoworks. Files written wholly by Sopranoworks carry
+  `Copyright 2026 Sopranoworks` and `SPDX-License-Identifier: Apache-2.0`; files derived from scredis keep their
+  form and carry a "Modified by Sopranoworks" notice where they were changed.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -193,4 +199,4 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License. See accompanying [LICENSE](LICENSE) file and [NOTICE](NOTICE).
+limitations under the License.

@@ -1,3 +1,5 @@
+// Copyright 2026 Sopranoworks
+// SPDX-License-Identifier: Apache-2.0
 // Pekko variant of ConfigVariant; the Akka build has a pass-through of the same name.
 package scredis.util
 

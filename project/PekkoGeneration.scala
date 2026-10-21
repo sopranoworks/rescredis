@@ -1,3 +1,5 @@
+// Copyright 2026 Sopranoworks
+// SPDX-License-Identifier: Apache-2.0
 import java.nio.charset.StandardCharsets
 import sbt._
 

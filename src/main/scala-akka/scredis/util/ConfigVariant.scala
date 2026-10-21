@@ -1,3 +1,5 @@
+// Copyright 2026 Sopranoworks
+// SPDX-License-Identifier: Apache-2.0
 package scredis.util
 
 import akka.actor.ActorSystem

@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright 2026 Sopranoworks
+# SPDX-License-Identifier: Apache-2.0
 #
 # Starts and stops the Redis servers the test suite expects, in Docker containers only
 # (nothing is installed on the host), and runs the tests against them. Every server is

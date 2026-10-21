@@ -1,4 +1,6 @@
-// Modified by Sopranoworks: tests the Redis methods that forward to the subscriber client.
+// Copyright 2026 Sopranoworks
+// SPDX-License-Identifier: Apache-2.0
+// Tests the Redis methods that forward to the subscriber client.
 package scredis
 
 import java.net.ServerSocket

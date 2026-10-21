@@ -1,3 +1,8 @@
+<!--
+Copyright 2026 Sopranoworks
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Generating the Apache Pekko artifact from the Akka source
 
 rescredis has one source tree, written for Akka. The Pekko artifact (`rescredis-pekko`) is not
