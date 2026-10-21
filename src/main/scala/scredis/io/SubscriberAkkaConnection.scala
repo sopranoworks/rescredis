@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: quit() does not wait for an outstanding request.
 package scredis.io
 
 import java.util.concurrent.Semaphore
@@ -136,13 +137,18 @@ abstract class SubscriberAkkaConnection(
   }
   
   protected def shutdown(): Future[Unit] = {
-    lock.acquire()
     isShuttingDown = true
     val quit = Quit()
-    unsubscribeAndThen {
+    if (lock.tryAcquire()) {
+      // no request is outstanding: unsubscribe, then quit
+      unsubscribeAndThen {
+        listenerActor ! SubscriberListenerActor.Shutdown(quit)
+      }
+      quit.future.onComplete(_ => lock.release())
+    } else {
+      // a request is outstanding: QUIT does not wait for its reply (the listener fails it, which releases the lock)
       listenerActor ! SubscriberListenerActor.Shutdown(quit)
     }
-    quit.future.onComplete(_ => lock.release())
     quit.future
   }
   

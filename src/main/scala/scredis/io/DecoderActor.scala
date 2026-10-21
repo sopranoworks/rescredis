@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: a reply on the subscriber connection that cannot be decoded fails the pending request.
 package scredis.io
 
 import akka.actor.{Actor, ActorLogging}
@@ -82,6 +83,8 @@ class DecoderActor(subscriptionOption: Option[Subscription]) extends Actor with 
           case e: Throwable =>
             val msg = data.decodeString("UTF-8").replace("\r\n", "\\r\\n")
             log.error(s"Could not decode PubSubMessage: $msg", e)
+            // the reply cannot be matched to a request: complete the pending request with an error
+            sender() ! SubscriberListenerActor.Fail(s"Could not decode reply: $msg")
         }
       }
     case x => log.error(s"Received unexpected message: $x")

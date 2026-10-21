@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, configuration per build variant.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, configuration per build variant.
 package scredis
 
 import akka.actor._
@@ -276,6 +276,12 @@ class Redis private[scredis] (
   
   /**
    * Sets the current client name. If the empty string is provided, the name will be unset.
+   *
+   * @note The name is set on every client owned by this $redis: the non-blocking one, the blocking one and the
+   *       subscriber one, those that have been initialised. Redis refuses `CLIENT SETNAME` on a connection that is
+   *       subscribed, so the subscriber client first unsubscribes from all its channels and patterns, sets the
+   *       name, then subscribes again: messages published meanwhile are not delivered to it, and the subscription
+   *       function receives the unsubscribe and subscribe events.
    *
    * @param name name to associate the client to, if empty, unsets the client name
    *

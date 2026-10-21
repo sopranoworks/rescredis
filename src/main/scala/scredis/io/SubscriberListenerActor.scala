@@ -1,9 +1,10 @@
+// Modified by Sopranoworks: every reply completes the pending request (status replies, errors, unmatched replies); QUIT fails what is outstanding.
 package scredis.io
 
 import akka.util.ByteString
 import scredis.exceptions._
-import scredis.protocol.{AuthConfig, Request, SimpleStringResponse}
-import scredis.protocol.requests.ConnectionRequests.{Auth, Echo, Ping, Quit, Select}
+import scredis.protocol.{AuthConfig, Request, Response}
+import scredis.protocol.requests.ConnectionRequests.Quit
 import scredis.protocol.requests.PubSubRequests
 import scredis.{PubSubMessage, Subscription}
 
@@ -51,6 +52,7 @@ class SubscriberListenerActor(
   private val savedSubscribedPatterns = MHashSet[String]()
   
   private var isInitialized = false
+  private var isClosing = false
   private var shouldSendRequests = false
   private var requestOpt: Option[Request[_]] = None
   private var requestResponsesCount = 0
@@ -98,23 +100,40 @@ class SubscriberListenerActor(
     data: ByteString, responsesCount: Int
   ): Unit = decoders.route(DecoderActor.SubscribePartition(data), self)
 
+  /** The request the next reply belongs to: the one that is partially answered, else the oldest one sent. */
+  private def pendingRequest(): Option[Request[_]] = requestOpt match {
+    case some @ Some(_) => some
+    case None => if (requests.isEmpty) None else Some(requests.pop())
+  }
+
+  private def clearPendingRequest(): Unit = {
+    requestOpt = None
+    requestResponsesCount = 0
+  }
+
+  /** Completes the pending request, if there is one, with an error. */
+  private def failPendingRequest(throwable: Throwable): Unit = {
+    pendingRequest().foreach(_.failure(throwable))
+    clearPendingRequest()
+  }
+
   override protected def always: Receive = super.always orElse {
     case Complete(message) => {
       requestResponsesCount += 1
-      val count = message match {
+      val countOpt = message match {
         case PubSubMessage.Subscribe(channel, count) => {
           log.info(s"Subscribed to channel: $channel")
           subscribedChannels += channel
           subscribedCount += 1
           subscribedChannelsCount += 1
-          count
+          Some(count)
         }
         case PubSubMessage.PSubscribe(pattern, count) => {
           log.info(s"Subscribed to pattern: $pattern")
           subscribedPatterns += pattern
           subscribedCount += 1
           subscribedPatternsCount += 1
-          count
+          Some(count)
         }
         case PubSubMessage.Unsubscribe(channelOpt, count) => {
           channelOpt.foreach { channel =>
@@ -124,7 +143,7 @@ class SubscriberListenerActor(
           val difference = subscribedCount - count
           subscribedCount -= difference
           subscribedChannelsCount -= difference
-          count
+          Some(count)
         }
         case PubSubMessage.PUnsubscribe(patternOpt, count) => {
           patternOpt.foreach { pattern =>
@@ -134,67 +153,64 @@ class SubscriberListenerActor(
           val difference = subscribedCount - count
           subscribedCount -= difference
           subscribedPatternsCount -= difference
-          count
+          Some(count)
         }
+        case _ => None
+      }
 
-        case x => throw RedisProtocolException(s"Unexpected pub sub message received: $x")
-      }
-      
-      val request: Request[_] = requestOpt match {
-        case Some(request) => request
-        case None => requests.pop()
-      }
-      val argsCount = request.argsCount
-      // Unsubscribe() or PUnsubscribe()
-      if (argsCount == 0) {
-        val (count, otherCount) = message match {
-          case PubSubMessage.Unsubscribe(_, count) => (count, subscribedPatternsCount)
-          case PubSubMessage.PUnsubscribe(_, count) => (count, subscribedChannelsCount)
-          case x => throw RedisProtocolException(
-            s"Unexpected pub sub message received: '$x' in response to '$request'"
-          )
-        }
-        if (count == otherCount) {
-          request.success(count)
-          requestOpt = None
-          requestResponsesCount = 0
-        } else {
-          requestOpt = Some(request)
-        }
-      } else {
-        if (argsCount == requestResponsesCount) {
-          request.success(count)
-          requestOpt = None
-          requestResponsesCount = 0
-        } else {
-          requestOpt = Some(request)
+      countOpt match {
+        case None =>
+          // a reply that matches no request: complete the pending one with an error instead of leaving it open
+          failPendingRequest(RedisProtocolException(s"Unexpected pub sub message received: $message"))
+        case Some(count) => pendingRequest() match {
+          case None =>
+            log.warning(s"Received '$message' without a pending request")
+            clearPendingRequest()
+          case Some(request) =>
+            val argsCount = request.argsCount
+            // Unsubscribe() or PUnsubscribe()
+            if (argsCount == 0) {
+              val otherCountOpt = message match {
+                case PubSubMessage.Unsubscribe(_, _) => Some(subscribedPatternsCount)
+                case PubSubMessage.PUnsubscribe(_, _) => Some(subscribedChannelsCount)
+                case _ => None
+              }
+              otherCountOpt match {
+                case None =>
+                  request.failure(RedisProtocolException(
+                    s"Unexpected pub sub message received: '$message' in response to '$request'"
+                  ))
+                  clearPendingRequest()
+                case Some(otherCount) =>
+                  if (count == otherCount) {
+                    request.success(count)
+                    clearPendingRequest()
+                  } else {
+                    requestOpt = Some(request)
+                  }
+              }
+            } else {
+              if (argsCount == requestResponsesCount) {
+                request.success(count)
+                clearPendingRequest()
+              } else {
+                requestOpt = Some(request)
+              }
+            }
         }
       }
     }
     case Confirm(value) =>
-      val request: Request[_] = requestOpt match {
-        case Some(request) => request
-        case None => requests.pop()
+      // a status reply (e.g. +OK to AUTH, CLIENT SETNAME or QUIT): the request decodes it itself
+      pendingRequest() match {
+        case Some(request) =>
+          log.debug(s"Completing ${request} with ${value}.")
+          request.complete(value)
+          clearPendingRequest()
+        case None => log.warning(s"Received '$value' without a pending request")
       }
-
-      log.debug(s"Trying to complete ${request} with ${value}.")
-
-      if (request.isInstanceOf[Auth] || request.isInstanceOf[Quit] || request.isInstanceOf[Select] ||
-          request.isInstanceOf[Echo] || request.isInstanceOf[Ping] ) {
-        // those requests must support completing with `Unit`
-        if (request.isInstanceOf[Auth] || request.isInstanceOf[Quit] || request.isInstanceOf[Select]) {
-          request.success(())
-        } else { // Echo or Ping
-          // other requests must support completing with `String`
-          request.success(value.value)
-        }
-        requestOpt = None
-        requestResponsesCount = 0
-      } else {
-        requestOpt = Some(request)
-      }
-
-    case Fail(message) => requests.pop().failure(RedisErrorResponseException(message))
+    case Fail(message) =>
+      failPendingRequest(RedisErrorResponseException(message))
     case SaveSubscriptions =>
       savedSubscribedChannels ++= subscribedChannels
       savedSubscribedPatterns ++= subscribedPatterns
@@ -202,14 +218,25 @@ class SubscriberListenerActor(
       onConnect()
       send(request)
     case RecoverPreviousSubscriberState =>
-      shouldSendRequests = true
-      subscribedChannels ++= savedSubscribedChannels
-      subscribedPatterns ++= savedSubscribedPatterns
-      savedSubscribedChannels.clear()
-      savedSubscribedPatterns.clear()
-      onInitialized()
-      shouldSendRequests = false
+      if (isClosing) {
+        savedSubscribedChannels.clear()
+        savedSubscribedPatterns.clear()
+      } else {
+        shouldSendRequests = true
+        subscribedChannels ++= savedSubscribedChannels
+        subscribedPatterns ++= savedSubscribedPatterns
+        savedSubscribedChannels.clear()
+        savedSubscribedPatterns.clear()
+        onInitialized()
+        shouldSendRequests = false
+      }
     case Shutdown(quit) =>
+      isClosing = true
+      // requests still outstanding when the connection is closed will never be answered
+      val closed = RedisIOException("Connection has been closed")
+      requestOpt.foreach(_.failure(closed))
+      failAllSentRequests(closed)
+      failAllQueuedRequests(closed)
       onConnect()
       send(quit)
   }
@@ -218,7 +245,7 @@ class SubscriberListenerActor(
 
 object SubscriberListenerActor {
   case class Complete(message: PubSubMessage)
-  case class Confirm(message: SimpleStringResponse)
+  case class Confirm(message: Response)
   case class Fail(message: String)
   case object SaveSubscriptions
   case class SendAsRegularClient(request: Request[_])

@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: tests Redis.auth with an ACL username.
+// Modified by Sopranoworks: tests Redis.auth with an ACL username (and Redis.clientSetName with a subscribed subscriber).
 package scredis
 
 import org.scalatest._
@@ -64,9 +64,11 @@ class RedisSpec extends AnyWordSpec
           redis.blocking.blPop(1, "LIST").get should be (empty)
           redis.ping().futureValue should be ("PONG")
 
-          // the non-blocking, the blocking and the subscriber connection are all the ACL user
-          val users = admin.clientList().futureValue.flatMap(_.get("user"))
-          users.count(_ == "tester") should be (3)
+          // name every connection of this Redis, then ask the server who they are: the non-blocking, the blocking
+          // and the subscriber connection are all the ACL user
+          redis.clientSetName("rescredis-acl").futureValue should be (())
+          val named = admin.clientList().futureValue.filter(_.get("name").contains("rescredis-acl"))
+          named.map(_.get("user")) should be (List.fill(3)(Some("tester")))
         } finally {
           redis.quit().futureValue
           admin.quit().futureValue
