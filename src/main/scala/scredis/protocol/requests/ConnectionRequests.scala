@@ -43,7 +43,14 @@ object ConnectionRequests {
     }
   }
 
+  /**
+   * The arguments of AUTH. The empty password without a username means "no password" and is sent
+   * as `AUTH default ""`: the single-argument `AUTH ""` is refused by Redis 6.2 and later when the
+   * server has no password, whereas the two-argument form is accepted for the default user when it
+   * has none (and fails with WRONGPASS when the server does require a password).
+   */
   private def authParams(username: Option[String], password: String): List[String] = {
-    List(username, Some(password)).flatten
+    if (username.isEmpty && password.isEmpty) List("default", password)
+    else List(username, Some(password)).flatten
   }
 }

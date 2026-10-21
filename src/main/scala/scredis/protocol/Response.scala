@@ -45,6 +45,23 @@ case class BulkStringResponse(valueOpt: Option[Array[Byte]]) extends Response {
 
 case class ArrayResponse(length: Int, buffer: ByteBuffer) extends Response {
 
+  /**
+   * Consumes `count` complete replies from the buffer without interpreting them. Nested arrays
+   * are consumed with their elements, so fields that a newer Redis appends to a reply (for
+   * example the metadata of CLUSTER SLOTS nodes or the key specifications of COMMAND) can be
+   * skipped.
+   */
+  private[scredis] def skip(count: Int): Unit = {
+    var i = 0
+    while (i < count) {
+      Protocol.decode(buffer) match {
+        case nested: ArrayResponse => nested.skip(nested.length)
+        case _ =>
+      }
+      i += 1
+    }
+  }
+
   def headOpt[R](decoder: Decoder[R]): Option[R] = if (length > 0) {
     val position = buffer.position()
     val response = Protocol.decode(buffer)
@@ -178,6 +195,8 @@ case class ArrayResponse(length: Int, buffer: ByteBuffer) extends Response {
             val masterNodeId: Option[String] = if (mha.length > 2) {
                               Some(Protocol.decode(buffer).asInstanceOf[BulkStringResponse].flattened[String])
                             } else None
+            // skip additional fields (e.g. the node metadata added by Redis 7)
+            if (mha.length > 3) mha.skip(mha.length - 3)
             val master = ClusterSlotRangeNodeInfo(Server(masterHost,masterPort.toInt),masterNodeId)
 
             // first replica begins at index 3 
@@ -193,11 +212,7 @@ case class ArrayResponse(length: Int, buffer: ByteBuffer) extends Response {
                          None
                      }
               // skip additional fields (which can be added in future according to doc)
-              var skipIndex=3
-              while(skipIndex < rh.length) {
-                 Protocol.decode(buffer)
-                 skipIndex += 1
-              }
+              if (rh.length > 3) rh.skip(rh.length - 3)
               val replica = ClusterSlotRangeNodeInfo(Server(replicaHost,replicaPort.toInt),replicaNodeId)
               replicaList = replica :: replicaList
               r += 1

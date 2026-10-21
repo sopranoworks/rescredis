@@ -106,7 +106,7 @@ class ListenerActor(
       } else {
         request match {
           case auth @ Auth(password, username) =>
-            authOpt = Some(AuthConfig(username, password))
+            authOpt = AuthConfig.afterAuth(username, password)
             doSend(auth)
           case select @ Select(db) =>
             database = db

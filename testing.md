@@ -1,26 +1,21 @@
 # Testing setup
 
-To run the Scredis tests, we need
+The tests need real Redis servers. They all run in Docker containers (nothing is installed on the
+host) and are Redis 7.4.2 from the Redis Stack image `redis/redis-stack-server:7.4.0-v2`, the version
+production runs:
 
-* Redis 4.0.0+
-* Docker installed and daemon running
+* `6379`: plain server, no password
+* `6380`: configured by `src/test/resources/redis-6380.conf` (password `foobar`, ACL user `tester`)
+* `7000`-`7005`: Redis cluster (3 masters, 3 replicas)
 
+Docker must be running. From the repository root:
 
-From `scredis` directory:
+    ./docker-redis.sh start             # start the servers
+    ./docker-redis.sh test "+test"      # run sbt in a container next to the servers (all Scala versions)
+    ./docker-redis.sh status            # containers, image digest, redis_version of every server
+    ./docker-redis.sh stop              # stop the servers
 
-    # for tests using multiple clients talking to single instances not in cluster
-    ./start-redis.sh
-    # for tests needing redis cluster (it should stay active, not go back to shell prompt)
-    # other docker container named 'redis' cannot be running or this will fail.
-    ./run-redis-cluster.sh
-
-Run tests from sbt as usual.
-
-To shut it down:
-    
-    # single instances can be killed using script:
-    ./stop-redis.sh
-    # stopping redis cluster is just Ctrl-C in terminal where docker was started
-    # or if docker is still running (docker is named 'redis')
-    `docker kill redis`
-
+The test container shares the servers' network namespace, so every server is `127.0.0.1` for the
+suite, as it expects (MIGRATE between 6379 and 6380, the cluster's announced addresses, the SLOWLOG
+client address). Restart the servers before a new run: some specs change the state of 6380.
+Other sbt commands work the same way, e.g. `./docker-redis.sh test "testOnly scredis.commands.StringCommandsSpec"`.

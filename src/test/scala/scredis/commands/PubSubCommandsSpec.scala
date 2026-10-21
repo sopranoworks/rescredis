@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: adapted to Redis 7.4.
 package scredis.commands
 
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
@@ -508,11 +509,13 @@ class PubSubCommandsSpec extends AnyWordSpec
         PSubscribe("*2", 2),
         PSubscribe("*1", 1)
       )
-      publisher.pubSubNumPat().futureValue should be (6)
+      // PUBSUB NUMPAT counts unique patterns ("*1", "*2", "*3"), not one per client subscription
+      // (6 before Redis 7)
+      publisher.pubSubNumPat().futureValue should be (3)
 
       client.unsubscribe().futureValue should be (3)
       client.pUnsubscribe().futureValue should be (0)
-      publisher.pubSubNumPat().futureValue should be (3)
+      publisher.pubSubNumPat().futureValue should be (2) // "*1" and "*2" remain (3 before Redis 7)
 
       client2.pUnsubscribe().futureValue should be (0)
       publisher.pubSubNumPat().futureValue should be (1)

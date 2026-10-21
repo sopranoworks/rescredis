@@ -220,14 +220,23 @@ package object scredis {
     object ReplicationState {
       case object Connect extends ReplicationState("connect")
       case object Connecting extends ReplicationState("connecting")
+      /** Redis 7: the handshake with the master (PING, AUTH, REPLCONF, PSYNC) is in progress */
+      case object Handshake extends ReplicationState("handshake")
       case object Sync extends ReplicationState("sync")
       case object Connected extends ReplicationState("connected")
+      /** Redis 7: the instance is not replicating */
+      case object NotReplicating extends ReplicationState("none")
+      /** Redis 7: a state that ROLE does not name */
+      case object Unknown extends ReplicationState("unknown")
       
       def apply(name: String): ReplicationState = name match {
         case Connect.name => Connect
         case Connecting.name => Connecting
+        case Handshake.name => Handshake
         case Sync.name => Sync
         case Connected.name => Connected
+        case NotReplicating.name => NotReplicating
+        case Unknown.name => Unknown
         case x => throw new IllegalArgumentException(s"Unknown replication state: $x")
       }
     }

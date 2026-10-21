@@ -57,11 +57,11 @@ libraryDependencies ++= Seq(
   "org.slf4j" % "slf4j-simple" % "2.0.20" % Test
 )
 
-// ScalaMeter is not published for Scala 3; 0.21 is not published for Scala 2.12
+// ScalaMeter is not published for Scala 3. 0.19 is the version src/bench is written for (its DSL
+// does not compile against 0.21, which is not published for Scala 2.12 either).
 libraryDependencies ++= {
   CrossVersion.partialVersion(scalaVersion.value) match {
-    case Some((2, 12)) => List("com.storm-enroute" %% "scalameter" % "0.19" % Test)
-    case Some((2, _)) => List("com.storm-enroute" %% "scalameter" % "0.21" % Test)
+    case Some((2, _)) => List("com.storm-enroute" %% "scalameter" % "0.19" % Test)
     case _ => Nil
   }
 }
@@ -122,3 +122,15 @@ paradoxTheme := Some(builtinParadoxTheme("generic"))
 lazy val Benchmark = config("bench") extend Test
 configs(Benchmark)
 inConfig(Benchmark)(Defaults.testSettings)
+
+// No benchmarks on Scala 3: ScalaMeter is not published for it, so src/bench is not compiled there
+Benchmark / unmanagedSourceDirectories := {
+  if (scalaBinaryVersion.value == "3") Nil else Seq(baseDirectory.value / "src" / "bench" / "scala")
+}
+val benchNotice = taskKey[Unit]("Says that benchmarks are not built for Scala 3")
+benchNotice := {
+  if (scalaBinaryVersion.value == "3") {
+    streams.value.log.info("bench: benchmarks are not built for Scala 3 (ScalaMeter is not published for Scala 3)")
+  }
+}
+Benchmark / compile := ((Benchmark / compile) dependsOn benchNotice).value

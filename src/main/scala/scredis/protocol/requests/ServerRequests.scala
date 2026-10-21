@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: adapted to Redis 7.4.
 package scredis.protocol.requests
 
 import java.nio.charset.StandardCharsets
@@ -20,21 +21,28 @@ object ServerRequests {
   private val commandInfoMapDecoder: Decoder[Map[String, scredis.CommandInfo]] = {
     case a: ArrayResponse => a.parsed[Option[(String, scredis.CommandInfo)], List] {
       case a: ArrayResponse => {
-        val info = a.parsed[Any, Vector] {
-          case b: BulkStringResponse => b
+        // name, arity, flags, first key, last key, key step; Redis 7 appends ACL categories, tips,
+        // key specifications and subcommands, which are skipped
+        val name = Protocol.decode(a.buffer) match {
+          case b: BulkStringResponse => b.flattened[String]
+          case x => throw new IllegalArgumentException(s"UNEXPECTED response for NAME: $x")
+        }
+        def nextInt(what: String): Int = Protocol.decode(a.buffer) match {
           case IntegerResponse(value) => value.toInt
-          case a: ArrayResponse => a.parsed[String, scala.collection.immutable.HashSet] {
+          case x => throw new IllegalArgumentException(s"UNEXPECTED response for $what: $x")
+        }
+        val arity = nextInt("ARITY")
+        val flags = Protocol.decode(a.buffer) match {
+          case f: ArrayResponse => f.parsed[String, scala.collection.immutable.HashSet] {
             case SimpleStringResponse(value) => value
             case x => throw new IllegalArgumentException(s"UNEXPECTED response for FLAGS: $x")
           }
-          case x => throw new IllegalArgumentException(s"UNEXPECTED response for INFO: $x")
+          case x => throw new IllegalArgumentException(s"UNEXPECTED response for FLAGS: $x")
         }
-        val name = info(0).asInstanceOf[BulkStringResponse].flattened[String]
-        val arity = info(1).asInstanceOf[Int]
-        val flags = info(2).asInstanceOf[scala.collection.immutable.HashSet[String]]
-        val firstKeyPosition = info(3).asInstanceOf[Int]
-        val lastKeyPosition = info(4).asInstanceOf[Int]
-        val keyStepCount = info(5).asInstanceOf[Int]
+        val firstKeyPosition = nextInt("FIRST KEY")
+        val lastKeyPosition = nextInt("LAST KEY")
+        val keyStepCount = nextInt("KEY STEP")
+        if (a.length > 6) a.skip(a.length - 6)
         Some(
           (
             name,

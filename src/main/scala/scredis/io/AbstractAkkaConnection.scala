@@ -40,7 +40,7 @@ abstract class AbstractAkkaConnection(
   
   protected def updateState(request: Request[_]): Unit = request match {
     case Auth(password, username) =>
-      authOpt = Some(AuthConfig(username, password))
+      authOpt = AuthConfig.afterAuth(username, password)
     case Select(db) =>
       database = db
     case ClientSetName(name) =>

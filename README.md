@@ -117,16 +117,28 @@ redis.subscriber.unsubscribe("My Channel")
 redis.quit()
 ```
 
-## Running the tests locally
+## Tests and Redis versions
+
+scredis-pekko is tested against Redis 7.4.2 (Redis Stack, image `redis/redis-stack-server:7.4.0-v2`), on
+Scala 2.12, 2.13 and 3.
 
 The tests need Redis servers on ports 6379, 6380 (configured by `src/test/resources/redis-6380.conf`)
-and a Redis cluster on ports 7000-7005. They run in Docker containers only:
+and a Redis cluster on ports 7000-7005. They run in Docker containers only; see [testing.md](testing.md):
 
 ```
 ./docker-redis.sh start
-sbt +test
+./docker-redis.sh test "+test"
 ./docker-redis.sh stop
 ```
+
+## API notes
+
+* `auth("")` means "no password", for `Redis`, `Client`, `BlockingClient` and `SubscriberClient`.
+  Redis 6.2 and later refuse `AUTH ""` when the server has no password, so it is sent as
+  `AUTH default ""`: it succeeds when the server has no password set and fails with an error when it has
+  one. The stored credentials are cleared, so a reconnect does not send `AUTH`, and subscriptions are kept.
+* Replies of Redis 7 are supported: `CLUSTER SLOTS` (node metadata), `COMMAND` / `COMMAND INFO` (extra
+  fields) and `ROLE` (replication states `handshake`, `none` and `unknown` in `Role.ReplicationState`).
 
 ## Documentation
 

@@ -1,19 +1,23 @@
+// Modified by Sopranoworks: adapted to Redis 7.4.
 package scredis.commands
 
 import org.scalatest._
 import org.scalatest.concurrent._
 import scredis._
 import scredis.exceptions._
+import scredis.protocol.AuthConfig
 import scredis.protocol.requests.ConnectionRequests._
 import scredis.tags._
 import scredis.util.TestUtils._
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.time.{Millis, Seconds, Span}
 import org.scalatest.wordspec.AnyWordSpec
 
 class ConnectionCommandsSpec extends AnyWordSpec
   with GivenWhenThen
   with BeforeAndAfterAll
   with Matchers
+  with Eventually
   with ScalaFutures {
   
   private val client = Client()
@@ -54,6 +58,46 @@ class ConnectionCommandsSpec extends AnyWordSpec
       "authenticate back to the server" taggedAs (V100) in {
         clientWithPassword.auth(CorrectPassword).futureValue should be (())
         clientWithPassword.ping().futureValue should be ("PONG")
+      }
+    }
+  }
+
+  s"${Auth.toString} with the empty string" when {
+    "the server has no password" should {
+      "succeed, clear the stored credentials and survive a reconnect" taggedAs (V100) in {
+        val admin = Client(port = 6380, authOpt = Some(AuthConfig(None, CorrectPassword)))
+        val victim = Client(port = 6380, authOpt = Some(AuthConfig(None, CorrectPassword)))
+        try {
+          victim.clientSetName("auth-empty").futureValue should be (())
+          admin.configSet("requirepass", "").futureValue should be (())
+
+          // `AUTH ""` is refused by Redis >= 6.2 when no password is set; "no password" must work
+          victim.auth("").futureValue should be (())
+          victim.ping().futureValue should be ("PONG")
+
+          // force a reconnect: it only succeeds if no AUTH with the old password is sent
+          val id = admin.clientList().futureValue.find(_.get("name") == Some("auth-empty")).get("id").toInt
+          admin.clientKillWithFilters(idOpt = Some(id)).futureValue should be (1)
+          eventually(timeout(Span(15, Seconds)), interval(Span(200, Millis))) {
+            victim.ping().futureValue should be ("PONG")
+          }
+        } finally {
+          admin.configSet("requirepass", CorrectPassword).futureValue should be (())
+          victim.quit().futureValue
+          admin.quit().futureValue
+        }
+      }
+    }
+    "the server has a password" should {
+      "return an error" taggedAs (V100) in {
+        val c = Client(port = 6380, authOpt = Some(AuthConfig(None, CorrectPassword)))
+        try {
+          a [RedisErrorResponseException] should be thrownBy {
+            c.auth("").!
+          }
+        } finally {
+          c.quit().futureValue
+        }
       }
     }
   }

@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: adapted to Redis 7.4.
 package scredis.commands
 
 import org.scalatest._
@@ -76,7 +77,8 @@ class ServerCommandsSpec extends AnyWordSpec
         client1.ping().futureValue should be ("PONG")
         // Cannot kill self
         val clients = client1.clientList().futureValue.filter { data =>
-          data("cmd").toLowerCase != "client"
+          // Redis >= 7 reports container commands with their subcommand ("client|list")
+          !data("cmd").toLowerCase.startsWith("client")
         }
         clients should have size (2)
         clients.reverse.foreach { data =>

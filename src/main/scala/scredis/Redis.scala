@@ -243,7 +243,10 @@ class Redis private[scredis] (
   /**
    * Authenticates to the server.
    * 
-   * @note Use the empty string to re-authenticate with no password.
+   * @note Use the empty string (without a username) to re-authenticate with no password. The request is
+   *       sent as `AUTH default ""`, which succeeds when the server has no password set and fails when it
+   *       has one, and the stored credentials are cleared, so that a reconnect does not send `AUTH`.
+   *       (`AUTH ""` is refused by Redis 6.2 and later when no password is set.)
    *
    * @param password the server password
    * @throws $e if authentication failed

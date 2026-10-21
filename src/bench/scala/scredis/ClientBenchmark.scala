@@ -31,7 +31,7 @@ object ClientBenchmark extends Bench[Double] {
   
   /* inputs */
 
-  final val hundredK = 100_000
+  final val hundredK = 100000
   final val sizes: Gen[Int] = Gen.range("size")(hundredK, 3 * hundredK, hundredK)
 
   /* tests */
