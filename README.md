@@ -1,18 +1,29 @@
-[ ![snapshot](https://api.bintray.com/packages/scredis/maven/scredis/images/download.svg) ](https://bintray.com/scredis/maven/scredis/_latestVersion)
-[![Build Status](https://travis-ci.org/scredis/scredis.svg?branch=master)](https://travis-ci.org/scredis/scredis)
+# scredis-pekko
 
-# scredis
+scredis-pekko is a Pekko port of [scredis](https://github.com/scredis/scredis), a reactive, non-blocking
+and fast Scala [Redis](http://redis.io) client. It replaces Akka with [Apache Pekko](https://pekko.apache.org/)
+and adds Scala 3 support. It is derived from scredis 2.4.3 (upstream tag `v2.4.3`, commit
+`2e1928d7a961856d2bb060ccec2a92dac9745343`).
 
-Scredis is a reactive, non-blocking and ultra-fast Scala [Redis](http://redis.io) client built on top of Akka IO. 
-It has been (and still is) extensively used in production at Livestream.
+This is an independent fork. It is not affiliated with or endorsed by the scredis maintainers, Livestream LLC,
+or the Apache Software Foundation. "Apache Pekko" is the name of a project of the Apache Software Foundation.
 
-* [Documentation](https://scredis.github.io/scredis/)
-* [Scaladoc](http://scredis.github.io/scredis/api/scredis/)
+## Versioning
+
+scredis-pekko X has the API of scredis X, ported to Pekko, with upstream bug fixes made after X backported.
+A fix to the port alone is released as X.1, X.2, …
+
+### Backported upstream fixes (relative to scredis 2.4.3)
+
+* `05592f8` — `RedisCluster.quit()` blocked (upstream #169).
+* `5debcf4` — the Redis remote address is created unresolved, so a reconnect resolves the host again (failover).
+* `52dfd27` — removes a stray comment line in the `KeyCommands` documentation (upstream #191).
+
+Upstream features added after 2.4.3 (`SMISMEMBER`, stream commands) are not included.
 
 ## Features
 * Supports all Redis commands up to v3.0.0
-* Built on top of Akka non-blocking IO
-* Super fast, see [Benchmarks](#benchmarks) section below
+* Built on top of Pekko non-blocking IO
 * Automatic reconnection
 * Automatic pipelining
 * Transactions
@@ -23,7 +34,7 @@ It has been (and still is) extensively used in production at Livestream.
 * Cluster support via `RedisCluster`
 * Customizable serialization and deserialization of command inputs and outputs
 * Fully configurable
-  * Akka dispatchers
+  * Pekko dispatchers
   * Pipelined write batch size
   * Receive timeout
   * TCP buffer size hints
@@ -34,25 +45,25 @@ It has been (and still is) extensively used in production at Livestream.
 
 ### Binaries
 
-Scredis 2.2.5+ is compatible with Scala 2.11, 2.12 and 2.13.
-Binary releases are hosted on the Sonatype Central Repository.
-
 ```scala
-libraryDependencies += "com.github.scredis" %% "scredis" % "2.4.3"
+libraryDependencies += "com.sopranoworks" %% "scredis-pekko" % "2.4.3"
 ```
 
-Snapshots / development versions are hosted on a separate bintray repository.
+Built for Scala 2.12, 2.13 and 3, against Apache Pekko 1.7.1.
 
-```scala
-resolvers += Resolver.bintrayRepo("scredis","maven")
+scredis-pekko is a drop-in replacement for code: the Scala package is still `scredis`.
+For the same reason it cannot be on the same classpath as `com.github.scredis:scredis`.
 
-libraryDependencies += "com.github.scredis" %% "scredis" % "<version>"
-```
+### Configuration
 
-Scredis library is tested on CI against Redis version 6.0.5.
-Using redis version 6.0.5 or above gives best compatibility guarantees.
-If you find any issues with your version of Redis please open issue on github
-providing your Redis server version and version of scredis you use. 
+The default configuration is in [reference.conf](src/main/resources/reference.conf). The canonical keys are
+`pekko` and `scredis.io.pekko`.
+
+For configuration written for Akka, `akka` and `scredis.io.akka` are read as well, both in the configuration
+scredis reads and in the `ActorSystem` that scredis creates itself (an `ActorSystem` that you pass in
+with `withActorSystem` or as an implicit is yours and is not touched). Write a key under one of them,
+not both: if the same key is set under both, the `akka` value is used. Values are not translated and
+must be valid for Pekko; for example, a mailbox type must be `org.apache.pekko.dispatch.BoundedMailbox`.
 
 ### Quick example
 ```scala
@@ -81,6 +92,7 @@ redis.quit()
 
 ```scala
 import scredis.PubSubMessage
+import scredis.stringReader
 private val subscriptionHandler: Function[PubSubMessage, Unit] = {
   case m: PubSubMessage.Subscribe => println(s"Subscribed to channel ${m.channel}")
   case m: PubSubMessage.Message => println(s"Received message for channel ${m.channel} with data ${m.readAs[String]()}")
@@ -105,133 +117,34 @@ redis.subscriber.unsubscribe("My Channel")
 redis.quit()
 ```
 
-## Performance benchmark
-
-The following benchmarks have been performed using [ScalaMeter](http://scalameter.github.io/) with the 
-`SeparateJvmsExecutor`, configured with `Warmer.Default`, `Measurer.Default` and `Aggregator.average`.
-The source code can be found [here](src/bench/scala/scredis/ClientBenchmark.scala).
-
-
-
-### Running benchmark tests
-
-Execute `./start-redis.sh` script to launch redis-server which will be used for performance testing. 
-Tests are executed against locally running redis-server instance.
-
-You can simply run tests from intellij or execute them from console with command:
- 
-`sbt "bench:testOnly scredis.ClientBenchmark"`
-
-When you want to update test results please remember to do following steps:
-- Check scala version / scredis client version / scredis-server version and update if needed.
-- Replace current results with output of a command from above
-
-### Results
-
-```
-# scala version: 2.13.1
-# scredis version: 2.3.4
-
-> java -version
-java version "1.7.0_45"
-Java(TM) SE Runtime Environment (build 1.7.0_45-b18)
-Java HotSpot(TM) 64-Bit Server VM (build 24.45-b08, mixed mode)
-
-> redis-server --version
-Redis server v=5.0.7 sha=00000000:0 malloc=jemalloc-5.2.1 bits=64 build=49eb440ab0786b6a
-
-
-[info] :::Summary of regression test results - Accepter():::
-[info] Test group: Client.PING
-[info] - Client.PING.Test-0 measurements:
-[info]   - at size -> 100000: passed
-[info]     (mean = 194.73 ms, ci = <41.74 ms, 347.73 ms>, significance = 1.0E-10)
-[info]   - at size -> 200000: passed
-[info]     (mean = 323.44 ms, ci = <159.08 ms, 487.81 ms>, significance = 1.0E-10)
-[info]   - at size -> 300000: passed
-[info]     (mean = 421.09 ms, ci = <352.69 ms, 489.48 ms>, significance = 1.0E-10)
-[info] Test group: Client.GET
-[info] - Client.GET.Test-1 measurements:
-[info]   - at size -> 100000: passed
-[info]     (mean = 312.43 ms, ci = <159.13 ms, 465.73 ms>, significance = 1.0E-10)
-[info]   - at size -> 200000: passed
-[info]     (mean = 404.21 ms, ci = <304.02 ms, 504.41 ms>, significance = 1.0E-10)
-[info]   - at size -> 300000: passed
-[info]     (mean = 793.53 ms, ci = <544.09 ms, 1042.97 ms>, significance = 1.0E-10)
-[info] Test group: Client.SET
-[info] - Client.SET.Test-2 measurements:
-[info]   - at size -> 100000: passed
-[info]     (mean = 272.35 ms, ci = <134.87 ms, 409.83 ms>, significance = 1.0E-10)
-[info]   - at size -> 200000: passed
-[info]     (mean = 471.69 ms, ci = <303.79 ms, 639.59 ms>, significance = 1.0E-10)
-[info]   - at size -> 300000: passed
-[info]     (mean = 615.98 ms, ci = <412.76 ms, 819.19 ms>, significance = 1.0E-10)
-[info] Summary: 3 tests passed, 0 tests failed.
-
-```
-
 ## Running the tests locally
 
-The tests require two Redis instances to be running with some specific configuration options set.
-They can be started with the `start-redis-test-instances.sh` script. Stopping is done with script `stop-redis.sh`
+The tests need Redis servers on ports 6379, 6380 (configured by `src/test/resources/redis-6380.conf`)
+and a Redis cluster on ports 7000-7005. They run in Docker containers only:
 
-Some tests require redis-cluster, redis-cluster can be started with `run-redis-cluster.sh`.
-6 redis instances will be started on ports 7000-7005 without authorization.
-
-
-## Releasing
-Scredis uses [sbt-dynver](https://github.com/dwijnand/sbt-dynver) plugin to automatically manage versioning.
-
-Releases are only performed from a master branch.
-
-If current commit on master branch is not tagged then a previous tag is used as base version with added current date (snapshot version).
-
-If current commit on master is tagged then a version is the same as tag and this version is stable.
-
-Build on travis checks what is current branch and if it is master it executes publish step.
-
-Publish step uses sbt plugin [sbt-bintray](https://github.com/sbt/sbt-bintray) to publish artifacts to bintray repository.
-
-Bintray repository [https://bintray.com/scredis/maven/scredis](https://bintray.com/scredis/maven/scredis).
-
-Released version is automatically populated to jcenter bintray [https://search.maven.org/search?q=g:com.github.scredis](https://search.maven.org/search?q=g:com.github.scredis)
-
-Manual step is needed to populate to [mvnrepository](https://mvnrepository.com/artifact/com.github.scredis/scredis)
-
-Maintainer performing stable release should:
-* switch to master branch and update README with tag `X.Y.Z`
-* for simplicity execute: `export SCREDIS_VERSION="X.Y.Z"`
-* commit changes `git add README.md && git commit -m "Release version v${SCREDIS_VERSION}"`
-* `git tag -a "v${SCREDIS_VERSION}" -m "Release version v${SCREDIS_VERSION}"` # tag current commit with given tag
-* execute `./gen-doc.sh && git add -A && git commit --amend --no-edit` to append changes to last commit
-* `git push origin v${SCREDIS_VERSION} && git push` # tags are not automatically pushed by `git push`
-* create new release on github
-* go to [bintray](https://bintray.com/scredis/maven/scredis#central) and click 'Sync' to push released version to mvnrepository.
+```
+./docker-redis.sh start
+sbt +test
+./docker-redis.sh stop
+```
 
 ## Documentation
 
-Can be found  in [https://scredis.github.io/scredis/](https://scredis.github.io/scredis/)
+The upstream documentation is at [https://scredis.github.io/scredis/](https://scredis.github.io/scredis/);
+it describes scredis on Akka.
 
-Documentation is generated using sbt plugin [paradox](https://developer.lightbend.com/docs/paradox/current/index.html).
+Documentation sources are in `src/main/paradox` and are converted with the sbt plugin
+[paradox](https://developer.lightbend.com/docs/paradox/current/index.html): `sbt paradox` writes the
+html files to `target/paradox/site/main`. `gen-doc.sh` generates the documentation and copies it to `./docs`.
 
-All files found in `src/main/paradox` are converted to proper html files and placed into `target/paradox/site/main`.
-
-To generate documentation one must execute `sbt paradox`.
-
-Github is configured to serve scredis page from files found in `/docs` that's why there is a need to copy generated
-documentation to mentioned directory to be properly served by github.
-
-To ease this process there is a script called `gen-doc.sh` that generates and moves documentation into proper place.
-
-When locally working on documentation this script can be used and documentation can be found in `./docs/index.html`.
-
-All snipets should be added to `Examples.scala` in test scope and included from documentation to
-ensure snipets always compile with latest version.
-
+All snippets should be added to `Examples.scala` in test scope and included from the documentation to
+ensure snippets always compile with the latest version.
 
 ## License
 
 Copyright (c) 2013 Livestream LLC. All rights reserved.
+
+Modifications (port from Akka to Apache Pekko, Scala 3 support) Copyright 2023-2026 Sopranoworks.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -242,4 +155,4 @@ Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
-limitations under the License. See accompanying LICENSE file.
+limitations under the License. See accompanying [LICENSE](LICENSE) file and [NOTICE](NOTICE).

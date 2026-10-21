@@ -1,15 +1,20 @@
-
 name := "scredis-pekko"
-organization := "com.github.scredis"
+organization := "com.sopranoworks"
+organizationName := "Sopranoworks"
+organizationHomepage := Some(url("https://sopranoworks.com"))
 
-scalaVersion := "3.3.1"
-crossScalaVersions := Seq(/*"2.11.12", */"2.12.12", "2.13.10", scalaVersion.value)
+// scredis-pekko X has the API of scredis X, ported to Pekko.
+version := "2.4.3"
+
+description := "Pekko port of scredis 2.4.3 (https://github.com/scredis/scredis, tag v2.4.3)"
+
+scalaVersion := "3.3.8"
+crossScalaVersions := Seq("2.12.21", "2.13.18", scalaVersion.value)
 
 scalacOptions ++= Seq(
   "-deprecation",
   "-feature",
   "-Xfatal-warnings",
-//  "-Ywarn-dead-code"
 )
 
 scalacOptions ++= {
@@ -17,7 +22,7 @@ scalacOptions ++= {
     case Some((2, n)) =>
       List("-Ywarn-dead-code")
     case _ =>
-      List("-source:3.0-migration", "-explain", "-rewrite")
+      List("-explain")
   }
 }
 
@@ -32,38 +37,32 @@ buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion)
 buildInfoPackage := "scredis"
 buildInfoOptions += BuildInfoOption.BuildTime
 
-git.remoteRepo := "git@github.com:scredis/scredis.git"
+git.remoteRepo := "git@github.com:sopranoworks/scredis-pekko.git"
 
-val pekkoV = "1.1.3"
-val loggingV = "3.9.5"
-val configV = "1.4.0"
-val collectionCompatV = "2.2.0"
-val typesafeConfigV = "1.4.3"
+val pekkoV = "1.7.1"
+val loggingV = "3.9.6"
+val collectionCompatV = "2.14.0"
+val typesafeConfigV = "1.4.9"
 
 libraryDependencies ++= Seq(
   "com.typesafe.scala-logging" %% "scala-logging" % loggingV,
   "com.typesafe" % "config" % typesafeConfigV,
   "org.apache.pekko" %% "pekko-actor" % pekkoV,
 
-//  "org.scala-lang.modules" %% "scala-collection-compat" % collectionCompatV,
+  "org.scala-lang.modules" %% "scala-collection-compat" % collectionCompatV,
 
-  "org.scalatest" %% "scalatest" % "3.2.19" % Test,
-  "org.scalatestplus" %% "scalacheck-1-18" % "3.2.19.0" % Test,
-  "org.scalacheck" %% "scalacheck" % "1.18.1" % Test,
-//  "com.storm-enroute" %% "scalameter" % "0.21" % Test,
-  "org.slf4j" % "slf4j-simple" % "2.0.16" % Test
+  "org.scalatest" %% "scalatest" % "3.2.20" % Test,
+  "org.scalatestplus" %% "scalacheck-1-20" % "3.2.20.0" % Test,
+  "org.scalacheck" %% "scalacheck" % "1.20.0" % Test,
+  "org.slf4j" % "slf4j-simple" % "2.0.20" % Test
 )
 
+// ScalaMeter is not published for Scala 3; 0.21 is not published for Scala 2.12
 libraryDependencies ++= {
   CrossVersion.partialVersion(scalaVersion.value) match {
-    case Some((2, n)) =>
-      List(
-        "org.scala-lang.modules" %% "scala-collection-compat" % collectionCompatV,
-        "com.storm-enroute" %% "scalameter" % "0.21" % Test
-      )
-    case _ => List(
-      "org.scala-lang.modules" % "scala-collection-compat_2.13" % collectionCompatV,
-    )
+    case Some((2, 12)) => List("com.storm-enroute" %% "scalameter" % "0.19" % Test)
+    case Some((2, _)) => List("com.storm-enroute" %% "scalameter" % "0.21" % Test)
+    case _ => Nil
   }
 }
 
@@ -77,27 +76,37 @@ publishMavenStyle := true
 publishArtifact in Test := false
 pomIncludeRepository := { _ => false }
 
-licenses := Seq(("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0.html")))
+ThisBuild / publishTo := {
+  if (isSnapshot.value) Some("central-snapshots" at "https://central.sonatype.com/repository/maven-snapshots/")
+  else localStaging.value
+}
+
+// Apache-2.0: ship LICENSE and NOTICE inside the binary and sources jars
+Compile / packageBin / mappings ++= Seq(
+  (baseDirectory.value / "LICENSE") -> "META-INF/LICENSE",
+  (baseDirectory.value / "NOTICE") -> "META-INF/NOTICE"
+)
+Compile / packageSrc / mappings ++= Seq(
+  (baseDirectory.value / "LICENSE") -> "META-INF/LICENSE",
+  (baseDirectory.value / "NOTICE") -> "META-INF/NOTICE"
+)
+
+licenses := Seq(License.Apache2)
 
 scmInfo := Some(ScmInfo(
-  url("https://github.com/scredis/scredis"),
-  "scm:git@github.com:scredis/scredis.git"
+  url("https://github.com/sopranoworks/scredis-pekko"),
+  "scm:git@github.com:sopranoworks/scredis-pekko.git"
 ))
 
-homepage := Some(url("https://github.com/scredis/scredis"))
+homepage := Some(url("https://github.com/sopranoworks/scredis-pekko"))
 
 developers := List(
   Developer(
-    id="kpbochenek",
-    name="kpbochenek",
-    email="kpbochenek@gmail.com",
-    url=url("https://github.com/kpbochenek")
+    id="sopranoworks",
+    name="Osamu Takahashi",
+    email="osamu.takahashi@sopranoworks.com",
+    url=url("https://sopranoworks.com")
   ))
-
-bintrayVcsUrl := Some("https://github.com/scredis/scredis.git")
-bintrayOrganization := Some("scredis")
-bintrayRepository := "maven"
-bintrayPackageLabels := Seq("redis")
 
 val scalaMeterFramework = new TestFramework("org.scalameter.ScalaMeterFramework")
 testFrameworks += scalaMeterFramework

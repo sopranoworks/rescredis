@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.examples
 
 import scredis.protocol.AuthConfig
@@ -103,6 +104,7 @@ object PublishExample {
 object SubscribeExample {
   // #subscribe_example
   import scredis.PubSubMessage
+  import scredis.stringReader
   private val subscriptionHandler: Function[PubSubMessage, Unit] = {
     case m: PubSubMessage.Subscribe => println(s"Subscribed to channel ${m.channel}")
     case m: PubSubMessage.Message => println(s"Received message for channel ${m.channel} with data ${m.readAs[String]()}")

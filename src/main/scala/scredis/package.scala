@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 
 import scala.language.implicitConversions
 import scala.concurrent.duration.FiniteDuration
@@ -7,13 +8,6 @@ import scredis.serialization._
 import scala.collection.immutable.HashSet
 
 package object scredis {
-  private var poolNumber = 0
-  
-//  private[scredis] def newPoolNumber: Int = synchronized {
-//    poolNumber += 1
-//    poolNumber
-//  }
-  
   implicit val stringReader: Reader[String] = UTF8StringReader
   
   implicit val bytesWriter: Writer[Array[Byte]] = BytesWriter

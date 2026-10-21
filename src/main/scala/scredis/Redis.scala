@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis
 
 import org.apache.pekko.actor._
@@ -5,7 +6,7 @@ import com.typesafe.config.Config
 import scredis.commands._
 import scredis.io.AkkaNonBlockingConnection
 import scredis.protocol.AuthConfig
-import scredis.util.UniqueNameGenerator
+import scredis.util.{AkkaConfigCompat, UniqueNameGenerator}
 
 import scala.concurrent.Future
 import scala.concurrent.duration._
@@ -38,7 +39,7 @@ class Redis private[scredis] (
 ) extends AkkaNonBlockingConnection(
   system = systemOrName match {
     case Left(system) => system
-    case Right(name) => ActorSystem(UniqueNameGenerator.getUniqueName(name))
+    case Right(name) => AkkaConfigCompat.createActorSystem(UniqueNameGenerator.getUniqueName(name))
   },
   host = host,
   port = port,

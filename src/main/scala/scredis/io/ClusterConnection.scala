@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.io
 
 import org.apache.pekko.actor.ActorSystem
@@ -6,7 +7,7 @@ import scredis.exceptions._
 import scredis.protocol._
 import scredis.protocol.requests.ClusterRequests.{ClusterCountKeysInSlot, ClusterInfo, ClusterSlots}
 import scredis.protocol.requests.ConnectionRequests.Quit
-import scredis.util.UniqueNameGenerator
+import scredis.util.{AkkaConfigCompat, UniqueNameGenerator}
 import scredis.{ClusterSlotRange, RedisConfigDefaults, Server}
 
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -51,7 +52,7 @@ abstract class ClusterConnection(
   private val systemState: ActorSystemState = {
     val systemName = RedisConfigDefaults.IO.Akka.ActorSystemName
     systemOpt.map(ActorSystemState(_, shouldTerminate = false))
-      .getOrElse(ActorSystemState(ActorSystem(UniqueNameGenerator.getUniqueName(systemName)), shouldTerminate = true))
+      .getOrElse(ActorSystemState(AkkaConfigCompat.createActorSystem(UniqueNameGenerator.getUniqueName(systemName)), shouldTerminate = true))
   }
 
   private def system: ActorSystem = systemState.system

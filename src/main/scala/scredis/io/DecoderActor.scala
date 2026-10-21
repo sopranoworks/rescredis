@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.io
 
 import org.apache.pekko.actor.{Actor, ActorLogging}

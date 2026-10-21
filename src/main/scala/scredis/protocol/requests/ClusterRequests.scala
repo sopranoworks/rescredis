@@ -1,7 +1,8 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.protocol.requests
 
 import scredis.protocol._
-import scredis.{ClusterNode, ClusterSlotRange, Server}
+import scredis.{ClusterNode, ClusterSlotRange, Server, stringReader}
 
 import scala.collection.compat._
 import scala.language.higherKinds

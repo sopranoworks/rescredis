@@ -1,8 +1,10 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis
 
 import com.typesafe.config.{Config, ConfigFactory}
 import com.typesafe.scalalogging.LazyLogging
 import scredis.protocol.AuthConfig
+import scredis.util.AkkaConfigCompat
 
 import scala.jdk.CollectionConverters._
 import scala.concurrent.duration._
@@ -17,7 +19,7 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
   def this(configName: String, path: String) = this(ConfigFactory.load(configName).getConfig(path))
   
   private val referenceConfig = ConfigFactory.defaultReference().getConfig("scredis")
-  private val mergedConfig = config.withFallback(referenceConfig)
+  private val mergedConfig = AkkaConfigCompat.normaliseScredis(config).withFallback(referenceConfig)
   mergedConfig.checkValid(referenceConfig)
   
   private def optionally[A](key: String)(f: => A)(implicit config: Config): Option[A] = {

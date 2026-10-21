@@ -6,3 +6,10 @@
 This product includes software developed by
 Livestream LLC. (www.livestream.com)
 Copyright (c) 2013 Livestream LLC.  All rights reserved.
+
+scredis-pekko
+Copyright 2023-2026 Sopranoworks
+
+This product is derived from scredis 2.4.3 (https://github.com/scredis/scredis),
+Copyright (c) 2013 Livestream LLC, licensed under the Apache License 2.0.
+Modifications: ported from Akka to Apache Pekko; Scala 3 support added.

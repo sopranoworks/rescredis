@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.protocol
 
 import java.nio.ByteBuffer
@@ -138,6 +139,7 @@ case class ArrayResponse(length: Int, buffer: ByteBuffer) extends Response {
   def parsedAsScanResponse[R, CC[X] <: Iterable[X]](
     decoder: Decoder[CC[R]]
   ): (Long, CC[R]) = {
+    import scredis.stringReader
     if (length != 2) {
       throw RedisProtocolException(s"Unexpected length for scan-like array response: $length")
     }
@@ -159,6 +161,7 @@ case class ArrayResponse(length: Int, buffer: ByteBuffer) extends Response {
 
   def parsedAsClusterSlotsResponse[CC[X] <: Iterable[X]](
     implicit factory: Factory[ClusterSlotRange, CC[ClusterSlotRange]]) : CC[ClusterSlotRange] = {
+    import scredis.stringReader
     val builder = factory.newBuilder
     var i = 0
     try {

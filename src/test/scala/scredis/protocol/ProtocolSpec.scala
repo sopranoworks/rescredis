@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: ported from Akka to Apache Pekko and Scala 3.
 package scredis.protocol
 
 
@@ -111,7 +112,7 @@ class ProtocolSpec extends AnyWordSpec with ScalaCheckDrivenPropertyChecks with 
       forAll (slots,hosts,ports) { (slot,host,port) =>
         val cmd = "MOVED"
         val args = s"$slot $host:$port"
-        val Moved(slot1,host1,port1) = Protocol.decodeMoveAsk(cmd,args)
+        val Moved(slot1,host1,port1) = (Protocol.decodeMoveAsk(cmd,args): @unchecked)
         slot1 should be (slot)
         host1 should be (host)
         port1 should be (port)
@@ -122,7 +123,7 @@ class ProtocolSpec extends AnyWordSpec with ScalaCheckDrivenPropertyChecks with 
       forAll (slots,hosts,ports) { (slot,host,port) =>
         val cmd = "ASK"
         val args = s"$slot $host:$port"
-        val Ask(slot1,host1,port1) = Protocol.decodeMoveAsk(cmd,args)
+        val Ask(slot1,host1,port1) = (Protocol.decodeMoveAsk(cmd,args): @unchecked)
         slot1 should be (slot)
         host1 should be (host)
         port1 should be (port)

@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: Scala 3 version, derived from upstream's LinkedHashSet for Scala 2.13.
 package scredis.util
 
 import scredis.util.LinkedHashSet.LinkedHashSetBuilder
@@ -5,6 +6,7 @@ import scredis.util.LinkedHashSet.LinkedHashSetBuilder
 import scala.collection.compat._
 import scala.collection.mutable
 import scala.collection.mutable.{LinkedHashSet => MLinkedHashSet}
+import scala.util.boundary
 
 /**
  * Represents an '''immutable''' linked hash set.
@@ -52,32 +54,35 @@ class LinkedHashSet[A](elems: A*) extends Set[A] with Serializable {
       }
       case (None, Some(until)) => {
         val builder = LinkedHashSet.newBuilder[A]
-        var untilFound = false
-        this.foreach { elem =>
-          if (elem == until) {
-            return builder.result()
-          } else {
-            builder += elem
+        boundary[LinkedHashSet[A]] {
+          this.foreach { elem =>
+            if (elem == until) {
+              boundary.break(builder.result())
+            } else {
+              builder += elem
+            }
           }
+          builder.result()
         }
-        builder.result()
       }
       case (Some(from), Some(until)) => {
         val builder = LinkedHashSet.newBuilder[A]
         var fromFound = false
-        this.foreach { elem =>
-          if (elem == until) {
-            return builder.result()
-          }
+        boundary[LinkedHashSet[A]] {
+          this.foreach { elem =>
+            if (elem == until) {
+              boundary.break(builder.result())
+            }
 
-          if (fromFound) {
-            builder += elem
-          } else if (elem == from) {
-            fromFound = true
-            builder += elem
+            if (fromFound) {
+              builder += elem
+            } else if (elem == from) {
+              fromFound = true
+              builder += elem
+            }
           }
+          builder.result()
         }
-        builder.result()
       }
     }
   }
