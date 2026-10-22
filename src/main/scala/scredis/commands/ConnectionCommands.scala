@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4.
+// Modified by Sopranoworks: adapted to Redis 7.4; auth is sent as given.
 package scredis.commands
 
 import scredis.io.NonBlockingConnection
@@ -19,10 +19,10 @@ trait ConnectionCommands { self: NonBlockingConnection =>
   /**
    * Authenticates to the server.
    * 
-   * @note Use the empty string (without a username) to re-authenticate with no password. The request is
-   *       sent as `AUTH default ""`, which succeeds when the server has no password set and fails when it
-   *       has one, and the stored credentials are cleared, so that a reconnect does not send `AUTH`.
-   *       (`AUTH ""` is refused by Redis 6.2 and later when no password is set.)
+   * @note `AUTH` is sent exactly as given: `AUTH <password>`, or `AUTH <username> <password>` with a username.
+   *       Only when the server accepts it, the credentials become those of this connection: it sends them again
+   *       whenever it reconnects. When the server refuses it, the credentials of the connection are unchanged.
+   *       Use `clearCredentials()` to stop sending `AUTH` on reconnects.
    *
    * @param password the server password
    * @throws $e if authentication failed

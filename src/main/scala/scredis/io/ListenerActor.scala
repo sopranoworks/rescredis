@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: fixes backported from upstream scredis (05592f8, 5debcf4); adapted to Redis 7.4 (auth).
+// Modified by Sopranoworks: fixes backported from upstream scredis (05592f8, 5debcf4); adapted to Redis 7.4 (auth); credentials kept only once accepted, clearCredentials.
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -105,9 +105,6 @@ class ListenerActor(
         request.failure(RedisIOException("Shutting down"))
       } else {
         request match {
-          case auth @ Auth(password, username) =>
-            authOpt = AuthConfig.afterAuth(username, password)
-            doSend(auth)
           case select @ Select(db) =>
             database = db
             doSend(select)
@@ -199,6 +196,10 @@ class ListenerActor(
   }
   
   protected def always: Receive = {
+    case CredentialsAccepted(credentials) =>
+      authOpt = Some(credentials)
+    case ClearCredentials =>
+      authOpt = None
     case Remove(count) =>
       (1 to count).foreach(_ => requests.pop())
     case Abort =>
@@ -431,4 +432,8 @@ object ListenerActor {
   case object Abort
   case object Shutdown
   case class Remove(count: Int)
+  /** The server accepted an `AUTH` with these credentials. */
+  case class CredentialsAccepted(credentials: AuthConfig)
+  /** Do not send `AUTH` on later reconnects. */
+  case object ClearCredentials
 }

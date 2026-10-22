@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: JsonCommands mixed in.
+// Modified by Sopranoworks: JsonCommands mixed in; tcp buffer hints and decoder dispatcher path passed on.
 package scredis
 
 import akka.actor.ActorSystem
@@ -45,6 +45,7 @@ class RedisCluster private[scredis](
     tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
     akkaListenerDispatcherPath = akkaListenerDispatcherPath,
     akkaIODispatcherPath = akkaIODispatcherPath,
+    akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
     tryAgainWait = tryAgainWait,
     clusterDownWait = clusterDownWait,
     systemOpt = systemOpt,
@@ -156,9 +157,11 @@ object RedisCluster {
     receiveTimeoutOpt = receiveTimeoutOpt,
     connectTimeout = connectTimeout,
     maxWriteBatchSize = maxWriteBatchSize,
-    tcpSendBufferSizeHint = tcpReceiveBufferSizeHint,
+    tcpSendBufferSizeHint = tcpSendBufferSizeHint,
+    tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
     akkaListenerDispatcherPath = akkaListenerDispatcherPath,
     akkaIODispatcherPath = akkaIODispatcherPath,
+    akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
     tryAgainWait = tryAgainWait,
     clusterDownWait = clusterDownWait,
     systemOpt = systemOpt,

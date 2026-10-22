@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: credentials kept only once accepted.
 package scredis.io
 
 import java.util.concurrent.locks.ReentrantLock
@@ -88,7 +89,7 @@ abstract class AkkaBlockingConnection(
   ): Try[A] = withLock {
     logger.debug(s"Sending blocking request: $request")
     updateState(request)
-    val future = Protocol.send(request, listenerActor)
+    val future = keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))
     Try(Await.result(future, timeout))
   }
   

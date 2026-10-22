@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: quit() does not wait for an outstanding request.
+// Modified by Sopranoworks: quit() does not wait for an outstanding request; credentials kept only once accepted.
 package scredis.io
 
 import java.util.concurrent.Semaphore
@@ -117,7 +117,7 @@ abstract class SubscriberAkkaConnection(
         lock.release()
       }
     }
-    auth.future
+    keepCredentialsOnceAccepted(auth, auth.future)
   }
   
   protected def setName(name: String): Future[Unit] = {

@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: SMOVE can be routed in a cluster.
 package scredis.protocol.requests
 
 import scala.language.higherKinds
@@ -96,7 +97,10 @@ object SetRequests {
     source: String, destination: String, member: W
   ) extends Request[Boolean](
     SMove, source, destination, implicitly[Writer[W]].write(member)
-  ) {
+  ) with Key {
+    // in a cluster the request goes to the node of the source key, both keys must be in one slot
+    override val key: String = source
+
     override def decode = {
       case i: IntegerResponse => i.toBoolean
     }

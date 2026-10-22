@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: RPOPLPUSH can be routed in a cluster.
 package scredis.protocol.requests
 
 import scredis.protocol._
@@ -155,7 +156,10 @@ object ListRequests {
   
   case class RPopLPush[R: Reader](
     source: String, destination: String
-  ) extends Request[Option[R]](RPopLPush, source, destination) {
+  ) extends Request[Option[R]](RPopLPush, source, destination) with Key {
+    // in a cluster the request goes to the node of the source key, both keys must be in one slot
+    override val key: String = source
+
     override def decode = {
       case b: BulkStringResponse => b.parsed[R]
     }

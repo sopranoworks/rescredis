@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: writes are awaited before another connection reads.
 package scredis.commands
 
 import org.scalatest._
@@ -33,11 +34,11 @@ class ListCommandsSpec extends AnyWordSpec
   BLPop.toString when {
     "the first existing key is not of type list" should {
       "return an error" taggedAs (V200) in {
-        client.rPush("LIST", "A")
+        client.rPush("LIST", "A").!
         a [RedisErrorResponseException] should be thrownBy {
           blockingClient.blPop(1, "HASH", "LIST").get
         }
-        client.del("LIST")
+        client.del("LIST").!
         a [RedisErrorResponseException] should be thrownBy  {
           blockingClient.blPop(1, "LIST", "HASH").get
         }
@@ -57,7 +58,7 @@ class ListCommandsSpec extends AnyWordSpec
           (result, elapsed)
         }
         Thread.sleep(500)
-        client.rPush("LIST2", "A")
+        client.rPush("LIST2", "A").!
         val (result, elapsed) = future.!
         result should contain (("LIST2", "A"))
         elapsed.toInt should be >= (500)
@@ -65,11 +66,11 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the keys contain a non-empty list" should {
       "pop the values in order" taggedAs (V200) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
-        client.rPush("LIST2", "C")
-        client.rPush("LIST3", "D")
-        client.rPush("LIST3", "E")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
+        client.rPush("LIST2", "C").!
+        client.rPush("LIST3", "D").!
+        client.rPush("LIST3", "E").!
         blockingClient.blPop(1, "LIST", "LIST2", "LIST3").get should contain (("LIST", "A"))
         blockingClient.blPop(1, "LIST", "LIST2", "LIST3").get should contain (("LIST", "B"))
         blockingClient.blPop(1, "LIST", "LIST2", "LIST3").get should contain (("LIST2", "C"))
@@ -82,11 +83,11 @@ class ListCommandsSpec extends AnyWordSpec
   BRPop.toString when {
     "the first existing key is not of type list" should {
       "return an error" taggedAs (V200) in {
-        client.lPush("LIST", "A")
+        client.lPush("LIST", "A").!
         a [RedisErrorResponseException] should be thrownBy {
           blockingClient.brPop(1, "HASH", "LIST").get
         }
-        client.del("LIST")
+        client.del("LIST").!
         a [RedisErrorResponseException] should be thrownBy  {
           blockingClient.brPop(1, "LIST", "HASH").get
         }
@@ -106,7 +107,7 @@ class ListCommandsSpec extends AnyWordSpec
           (result, elapsed)
         }
         Thread.sleep(500)
-        client.lPush("LIST2", "A")
+        client.lPush("LIST2", "A").!
         val (result, elapsed) = future.!
         result should contain (("LIST2", "A"))
         elapsed.toInt should be >= (500)
@@ -114,11 +115,11 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the keys contain a non-empty list" should {
       "pop the values in order" taggedAs (V200) in {
-        client.lPush("LIST", "A")
-        client.lPush("LIST", "B")
-        client.lPush("LIST2", "C")
-        client.lPush("LIST3", "D")
-        client.lPush("LIST3", "E")
+        client.lPush("LIST", "A").!
+        client.lPush("LIST", "B").!
+        client.lPush("LIST2", "C").!
+        client.lPush("LIST3", "D").!
+        client.lPush("LIST3", "E").!
         blockingClient.brPop(1, "LIST", "LIST2", "LIST3").get should contain (("LIST", "A"))
         blockingClient.brPop(1, "LIST", "LIST2", "LIST3").get should contain (("LIST", "B"))
         blockingClient.brPop(1, "LIST", "LIST2", "LIST3").get should contain (("LIST2", "C"))
@@ -143,7 +144,7 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the dest key does not contain a list" should {
       "return an error" taggedAs (V220) in {
-        client.lPush("LIST", "A")
+        client.lPush("LIST", "A").!
         a [RedisErrorResponseException] should be thrownBy {
           blockingClient.brPopLPush("LIST", "HASH", 1).get
         }
@@ -174,9 +175,9 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the index is out of range" should {
       "return None" taggedAs (V100) in {
-        client.rPush("LIST", "Hello")
-        client.rPush("LIST", "World")
-        client.rPush("LIST", "!")
+        client.rPush("LIST", "Hello").!
+        client.rPush("LIST", "World").!
+        client.rPush("LIST", "!").!
         client.lIndex("LIST", -100).futureValue should be (empty)
         client.lIndex("LIST", 100).futureValue should be (empty)
       }
@@ -190,7 +191,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lIndex("LIST", -1).futureValue should contain ("!")
         client.lIndex("LIST", -2).futureValue should contain ("World")
         client.lIndex("LIST", -3).futureValue should contain ("Hello")
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -211,9 +212,9 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the pivot is not in the list" should {
       "return None" taggedAs (V220) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "C")
-        client.rPush("LIST", "E")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "C").!
+        client.rPush("LIST", "E").!
         client.lInsert("LIST", Position.Before, "X", SomeValue).futureValue should be (empty)
       }
     }
@@ -226,7 +227,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "A", "B", "C", "D", "E", "F", "G"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -244,10 +245,10 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "return the number of elements contained in the list" taggedAs (V100) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
         client.lLen("LIST").futureValue should be (2)
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -265,8 +266,8 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "pop the first element of the list" taggedAs (V100) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
         client.lPop("LIST").futureValue should contain ("A")
         client.lPop("LIST").futureValue should contain ("B")
         client.lPop("LIST").futureValue should be (empty)
@@ -296,7 +297,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "2", "1", "B", "A"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -321,7 +322,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "2", "1", "B", "A"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -343,13 +344,13 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "prepend the value to the existing list" taggedAs (V220) in {
-        client.lPush("LIST", "3")
+        client.lPush("LIST", "3").!
         client.lPushX("LIST", "2").futureValue should be (2)
         client.lPushX("LIST", "1").futureValue should be (3)
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "1", "2", "3"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -369,10 +370,10 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "return the elements in the specified range" taggedAs (V100) in {
-        client.rPush("LIST", "0")
-        client.rPush("LIST", "1")
-        client.rPush("LIST", "2")
-        client.rPush("LIST", "3")
+        client.rPush("LIST", "0").!
+        client.rPush("LIST", "1").!
+        client.rPush("LIST", "2").!
+        client.rPush("LIST", "3").!
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "0", "1", "2", "3"
         )
@@ -393,7 +394,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lRange("LIST", -4, -1).futureValue should contain theSameElementsInOrderAs List(
           "0", "1", "2", "3"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -413,14 +414,14 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "delete the specified elements" taggedAs (V100) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
-        client.rPush("LIST", "C")
-        client.rPush("LIST", "D")
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
-        client.rPush("LIST", "C")
-        client.rPush("LIST", "D")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
+        client.rPush("LIST", "C").!
+        client.rPush("LIST", "D").!
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
+        client.rPush("LIST", "C").!
+        client.rPush("LIST", "D").!
 
         client.lRem("LIST", "X").futureValue should be (0)
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
@@ -479,9 +480,9 @@ class ListCommandsSpec extends AnyWordSpec
     "the list contains some elements" should {
       Given("the index is out of range")
       "return an error" taggedAs (V100) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
-        client.rPush("LIST", "C")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
+        client.rPush("LIST", "C").!
         a [RedisErrorResponseException] should be thrownBy {
           client.lSet("LIST", 3, "X").!
         }
@@ -497,19 +498,19 @@ class ListCommandsSpec extends AnyWordSpec
       }
       Given("the index is correct")
       "set the provided values at the corresponding indices" taggedAs (V100) in {
-        client.lSet("LIST", 0, "D")
-        client.lSet("LIST", 1, "E")
-        client.lSet("LIST", 2, "F")
+        client.lSet("LIST", 0, "D").!
+        client.lSet("LIST", 1, "E").!
+        client.lSet("LIST", 2, "F").!
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "D", "E", "F"
         )
-        client.lSet("LIST", -3, "A")
-        client.lSet("LIST", -2, "B")
-        client.lSet("LIST", -1, "C")
+        client.lSet("LIST", -3, "A").!
+        client.lSet("LIST", -2, "B").!
+        client.lSet("LIST", -1, "C").!
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "A", "B", "C"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -517,7 +518,7 @@ class ListCommandsSpec extends AnyWordSpec
   LTrim.toString when {
     "the key does not exist" should {
       "do nothing" taggedAs (V100) in {
-        client.lTrim("LIST", 0, -1)
+        client.lTrim("LIST", 0, -1).!
         client.lRange("LIST").futureValue should be (empty)
       }
     }
@@ -530,38 +531,38 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "trim the list to the specified range" taggedAs (V100) in {
-        client.rPush("LIST", "0")
-        client.rPush("LIST", "1")
-        client.rPush("LIST", "2")
-        client.rPush("LIST", "3")
+        client.rPush("LIST", "0").!
+        client.rPush("LIST", "1").!
+        client.rPush("LIST", "2").!
+        client.rPush("LIST", "3").!
 
-        client.rPush("LIST2", "0")
-        client.rPush("LIST2", "1")
-        client.rPush("LIST2", "2")
-        client.rPush("LIST2", "3")
+        client.rPush("LIST2", "0").!
+        client.rPush("LIST2", "1").!
+        client.rPush("LIST2", "2").!
+        client.rPush("LIST2", "3").!
 
-        client.rPush("LIST3", "0")
-        client.rPush("LIST3", "1")
-        client.rPush("LIST3", "2")
-        client.rPush("LIST3", "3")
+        client.rPush("LIST3", "0").!
+        client.rPush("LIST3", "1").!
+        client.rPush("LIST3", "2").!
+        client.rPush("LIST3", "3").!
 
-        client.lTrim("LIST", 0, 0)
+        client.lTrim("LIST", 0, 0).!
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List("0")
-        client.lTrim("LIST2", 0, -1)
+        client.lTrim("LIST2", 0, -1).!
         client.lRange("LIST2").futureValue should contain theSameElementsInOrderAs List(
           "0", "1", "2", "3"
         )
-        client.lTrim("LIST2", -4, -1)
+        client.lTrim("LIST2", -4, -1).!
         client.lRange("LIST2").futureValue should contain theSameElementsInOrderAs List(
           "0", "1", "2", "3"
         )
-        client.lTrim("LIST2", 0, -3)
+        client.lTrim("LIST2", 0, -3).!
         client.lRange("LIST2").futureValue should contain theSameElementsInOrderAs List("0", "1")
-        client.lTrim("LIST3", 2, 3)
+        client.lTrim("LIST3", 2, 3).!
         client.lRange("LIST3").futureValue should contain theSameElementsInOrderAs List("2", "3")
-        client.lTrim("LIST3", 1, 1)
+        client.lTrim("LIST3", 1, 1).!
         client.lRange("LIST3").futureValue should contain theSameElementsInOrderAs List("3")
-        client.del("LIST", "LIST2", "LIST3")
+        client.del("LIST", "LIST2", "LIST3").!
       }
     }
   }
@@ -579,8 +580,8 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "pop the first element of the list" taggedAs (V100) in {
-        client.rPush("LIST", "A")
-        client.rPush("LIST", "B")
+        client.rPush("LIST", "A").!
+        client.rPush("LIST", "B").!
         client.rPop("LIST").futureValue should contain ("B")
         client.rPop("LIST").futureValue should contain ("A")
         client.rPop("LIST").futureValue should be (empty)
@@ -598,7 +599,7 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the source and dest keys are identical" should {
       "do nothing" taggedAs (V120) in {
-        client.rPush("LIST", "A")
+        client.rPush("LIST", "A").!
         client.rPopLPush("LIST", "LIST").futureValue should contain ("A")
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List("A")
       }
@@ -623,9 +624,9 @@ class ListCommandsSpec extends AnyWordSpec
     "both lists contain some elements" should {
       "pop the last element of list at source key and " +
         "prepend it to list at dest key" taggedAs (V120) in {
-          client.rPush("LIST", "A")
-          client.rPush("LIST", "B")
-          client.rPush("LIST", "C")
+          client.rPush("LIST", "A").!
+          client.rPush("LIST", "B").!
+          client.rPush("LIST", "C").!
 
           client.rPopLPush("LIST", "LIST2").futureValue should contain ("C")
           client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List("A", "B")
@@ -649,7 +650,7 @@ class ListCommandsSpec extends AnyWordSpec
             "A", "B", "C"
           )
 
-          client.del("LIST", "LIST2")
+          client.del("LIST", "LIST2").!
         }
     }
   }
@@ -676,7 +677,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "A", "B", "1", "2"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -701,7 +702,7 @@ class ListCommandsSpec extends AnyWordSpec
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "A", "B", "1", "2"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }
@@ -723,13 +724,13 @@ class ListCommandsSpec extends AnyWordSpec
     }
     "the list contains some elements" should {
       "append the value to the existing list" taggedAs (V220) in {
-        client.rPush("LIST", "1")
+        client.rPush("LIST", "1").!
         client.rPushX("LIST", "2").futureValue should be (2)
         client.rPushX("LIST", "3").futureValue should be (3)
         client.lRange("LIST").futureValue should contain theSameElementsInOrderAs List(
           "1", "2", "3"
         )
-        client.del("LIST")
+        client.del("LIST").!
       }
     }
   }

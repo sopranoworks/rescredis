@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation).
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials.
 package scredis
 
 import akka.actor.ActorSystem
@@ -128,17 +128,17 @@ class SubscriberClient(
   /**
    * Authenticates to the server.
    * 
-   * @note Use the empty string (without a username) to re-authenticate with no password. The request is
-   *       sent as `AUTH default ""`, which succeeds when the server has no password set and fails when it
-   *       has one, and the stored credentials are cleared, so that a reconnect does not send `AUTH`.
-   *       (`AUTH ""` is refused by Redis 6.2 and later when no password is set.)
+   * @note `AUTH` is sent exactly as given: `AUTH <password>`, or `AUTH <username> <password>` with a username.
+   *       Only when the server accepts it, the credentials become those of this connection: it sends them again
+   *       whenever it reconnects. When the server refuses it, the credentials of the connection are unchanged.
+   *       Use `clearCredentials()` to stop sending `AUTH` on reconnects.
    *
    * @param password the server password
    * @throws $e if authentication failed
    *
    * @since 1.0.0
    */
-  def auth(password: String, username: Option[String]): Future[Unit] = authenticate(password, username)
+  def auth(password: String, username: Option[String] = None): Future[Unit] = authenticate(password, username)
   
   /**
    * Sets the current client name. If the empty string is provided, the name will be unset.

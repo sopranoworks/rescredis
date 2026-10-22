@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4.
+// Modified by Sopranoworks: adapted to Redis 7.4; clearCredentials instead of auth("").
 package scredis.commands
 
 import java.util.concurrent.{LinkedBlockingQueue, TimeUnit}
@@ -317,10 +317,13 @@ class PubSubCommandsSpec extends AnyWordSpec
 
       publisher.configSet("requirepass", "").futureValue should be (())
 
-      client.auth("", None).futureValue should be (())
+      // the server has no password any more: a reconnect must not send AUTH. Nothing is sent to Redis now,
+      // so the subscriptions are not touched (no unsubscribe, no subscribe)
+      client.clearCredentials()
 
-      subscribes.poll(2) should have size (2)
-      pSubscribes.poll(3) should have size (3)
+      subscribes.poll(1) should be (empty)
+      pSubscribes.poll(1) should be (empty)
+      unsubscribes.poll(1) should be (empty)
 
       client.subscribe("CHANNEL3").futureValue should be (6)
       client.pSubscribe("*").futureValue should be (7)

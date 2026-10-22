@@ -17,7 +17,7 @@ When you use `SubscriberClient` from Redis instance then a `scredis.Subscription
 type Subscription = Function[scredis.PubSubMessage, Any]
 ```
 
-The complete list of `scredis.PubSubMessage` can be found [here](http://scredis.github.io/scredis/api/snapshot/#scredis.package$$PubSubMessage$).
+The messages are the subclasses of `scredis.PubSubMessage`, defined in the `scredis` package object (`PubSubMessage.Subscribe`, `PSubscribe`, `Unsubscribe`, `PUnsubscribe`, `Message`, `PMessage` and `Error`); the API documentation of the `rescredis` artifact (its `-javadoc.jar`) lists them.
 
 @@snip [Hello.scala](/src/test/scala/scredis/examples/Examples.scala) { #subscribe_example }
 

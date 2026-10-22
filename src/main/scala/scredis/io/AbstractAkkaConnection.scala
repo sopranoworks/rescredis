@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth).
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth); credentials kept only once accepted, clearCredentials.
 package scredis.io
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}
@@ -9,8 +9,9 @@ import scredis.protocol.{AuthConfig, Request}
 import scredis.protocol.requests.ConnectionRequests.{Auth, Quit, Select}
 import scredis.protocol.requests.ServerRequests.{ClientSetName, Shutdown}
 
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
+import scala.util.Success
 
 abstract class AbstractAkkaConnection(
   protected val system: ActorSystem,
@@ -39,8 +40,6 @@ abstract class AbstractAkkaConnection(
   protected val listenerActor: ActorRef
   
   protected def updateState(request: Request[_]): Unit = request match {
-    case Auth(password, username) =>
-      authOpt = AuthConfig.afterAuth(username, password)
     case Select(db) =>
       database = db
     case ClientSetName(name) =>
@@ -55,6 +54,34 @@ abstract class AbstractAkkaConnection(
     case _            =>
   }
   
+  /**
+   * The credentials of an `AUTH` become those of the connection (and of its listener) only once the server has
+   * accepted it. The returned future completes after they have been stored, so that whoever waits for it can rely on
+   * them (for example a client created from this connection afterwards).
+   */
+  protected def keepCredentialsOnceAccepted[A](request: Request[A], future: Future[A]): Future[A] = request match {
+    case Auth(password, username) =>
+      future.andThen {
+        case Success(_) =>
+          val credentials = AuthConfig(username, password)
+          authOpt = Some(credentials)
+          listenerActor ! ListenerActor.CredentialsAccepted(credentials)
+      }
+    case _ => future
+  }
+
+  /**
+   * Removes the credentials of this connection: no `AUTH` is sent when it reconnects. This changes the
+   * configuration of the connection only; nothing is sent to Redis, and the connection stays authenticated
+   * until it is closed.
+   *
+   * @since 1.0.0
+   */
+  def clearCredentials(): Unit = {
+    authOpt = None
+    listenerActor ! ListenerActor.ClearCredentials
+  }
+
   protected def getAuthOpt: Option[AuthConfig] = authOpt
   protected def getDatabase: Int = database
   protected def getNameOpt: Option[String] = nameOpt

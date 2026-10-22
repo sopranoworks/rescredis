@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: credentials kept only once accepted.
 package scredis.io
 
 import akka.actor._
@@ -75,7 +76,7 @@ abstract class AkkaNonBlockingConnection(
     } else {
       logger.debug(s"Sending request: $request")
       updateState(request)
-      Protocol.send(request, listenerActor)
+      keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))
     }
   }
   

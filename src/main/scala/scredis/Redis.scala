@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant; tcp receive buffer hint, failCommandOnConnecting of the blocking client, credentials (clearCredentials).
 package scredis
 
 import akka.actor._
@@ -50,7 +50,7 @@ class Redis private[scredis] (
   receiveTimeoutOpt = receiveTimeoutOpt,
   maxWriteBatchSize = maxWriteBatchSize,
   tcpSendBufferSizeHint = tcpSendBufferSizeHint,
-  tcpReceiveBufferSizeHint = tcpSendBufferSizeHint,
+  tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
   akkaListenerDispatcherPath = akkaListenerDispatcherPath,
   akkaIODispatcherPath = akkaIODispatcherPath,
   akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
@@ -92,7 +92,8 @@ class Redis private[scredis] (
       tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
       akkaListenerDispatcherPath = akkaListenerDispatcherPath,
       akkaIODispatcherPath = akkaIODispatcherPath,
-      akkaDecoderDispatcherPath = akkaDecoderDispatcherPath
+      akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
+      failCommandOnConnecting = failCommandOnConnecting
     )(system)
   }
   
@@ -244,10 +245,14 @@ class Redis private[scredis] (
   /**
    * Authenticates to the server.
    * 
-   * @note Use the empty string (without a username) to re-authenticate with no password. The request is
-   *       sent as `AUTH default ""`, which succeeds when the server has no password set and fails when it
-   *       has one, and the stored credentials are cleared, so that a reconnect does not send `AUTH`.
-   *       (`AUTH ""` is refused by Redis 6.2 and later when no password is set.)
+   * @note `AUTH` is sent exactly as given: `AUTH <password>`, or `AUTH <username> <password>` with a username.
+   *       Only when the server accepts it, the credentials become those of this connection: it sends them again
+   *       whenever it reconnects. When the server refuses it, the credentials of the connection are unchanged.
+   *       Use `clearCredentials()` to stop sending `AUTH` on reconnects.
+   * @note It is sent on every client owned by this $redis (the blocking one and the subscriber one, if they have
+   *       been initialised, and the non-blocking one), and each of them keeps the credentials on its own
+   *       accepted `AUTH`; the result is that of the non-blocking client. Clients initialised later get the
+   *       credentials of the non-blocking client.
    *
    * @param password the server password
    * @param username the ACL user name, if any; it is used for every client owned by this $redis
@@ -275,6 +280,22 @@ class Redis private[scredis] (
     }
   }
   
+  /**
+   * Removes the credentials of every client owned by this $redis: no `AUTH` is sent when they reconnect.
+   * Nothing is sent to Redis.
+   *
+   * @since 1.0.0
+   */
+  override def clearCredentials(): Unit = {
+    if (shouldShutdownBlockingClient) {
+      blocking.clearCredentials()
+    }
+    if (shouldShutdownSubscriberClient) {
+      subscriber.clearCredentials()
+    }
+    super.clearCredentials()
+  }
+
   /**
    * Sets the current client name. If the empty string is provided, the name will be unset.
    *
@@ -419,7 +440,7 @@ object Redis {
     receiveTimeoutOpt = receiveTimeoutOpt,
     maxWriteBatchSize = maxWriteBatchSize,
     tcpSendBufferSizeHint = tcpSendBufferSizeHint,
-    tcpReceiveBufferSizeHint = tcpSendBufferSizeHint,
+    tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
     actorSystemName = actorSystemName,
     akkaListenerDispatcherPath = akkaListenerDispatcherPath,
     akkaIODispatcherPath = akkaIODispatcherPath,
@@ -525,7 +546,7 @@ object Redis {
     receiveTimeoutOpt = receiveTimeoutOpt,
     maxWriteBatchSize = maxWriteBatchSize,
     tcpSendBufferSizeHint = tcpSendBufferSizeHint,
-    tcpReceiveBufferSizeHint = tcpSendBufferSizeHint,
+    tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
     akkaListenerDispatcherPath = akkaListenerDispatcherPath,
     akkaIODispatcherPath = akkaIODispatcherPath,
     akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,

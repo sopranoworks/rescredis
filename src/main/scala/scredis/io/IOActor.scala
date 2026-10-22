@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: reports the buffer sizes it connects with.
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -41,15 +42,20 @@ class IOActor(
   protected var connection: ActorRef = _
   
   protected def connect(): Unit = {
-    log.info(s"Connecting to $remote")
+    val sendBuffer = SO.SendBufferSize(tcpSendBufferSizeHint)
+    val receiveBuffer = SO.ReceiveBufferSize(tcpReceiveBufferSizeHint)
+    log.info(
+      s"Connecting to $remote (tcp send buffer ${sendBuffer.size} bytes, " +
+        s"receive buffer ${receiveBuffer.size} bytes)"
+    )
     IO(Tcp) ! Connect(
       remoteAddress = remote,
       options = List[akka.io.Inet.SocketOption](
         SO.KeepAlive(true),
         SO.TcpNoDelay(true),
         SO.ReuseAddress(true),
-        SO.SendBufferSize(tcpSendBufferSizeHint),
-        SO.ReceiveBufferSize(tcpReceiveBufferSizeHint)
+        sendBuffer,
+        receiveBuffer
       ),
       timeout = Some(connectTimeout)
     )

@@ -70,6 +70,11 @@ The Scala package is still `scredis`, so code does not change: replace
 rescredis cannot be on the same classpath as `com.github.scredis:scredis`, and the two artifacts of rescredis
 cannot be on the same classpath either.
 
+One behaviour needs attention: `auth("")` sends `AUTH ""`, exactly as given. Redis 6.2 and later refuse it with an
+error when the server has no password. scredis relied on `auth("")` to mean "no password" on older servers (the
+empty password was stored, and sent again on reconnects); where your code does that, call `clearCredentials()`
+instead: it makes the connection stop sending `AUTH` when it reconnects, and sends nothing to Redis.
+
 ### Configuration
 
 The default configuration is in `reference.conf` (`src/main/resources-akka` and `src/main/resources-pekko`).
@@ -133,6 +138,27 @@ redis.subscriber.unsubscribe("My Channel")
 
 // Shutdown all initialized internal clients along with the ActorSystem
 redis.quit()
+```
+
+## Cluster
+
+`RedisCluster` sends a command to the node that holds the slot of its key, follows `MOVED` / `ASK` redirections
+and retries `TRYAGAIN` / `CLUSTERDOWN`. A command with several keys (`MGET`, `MSET`, `MSETNX`, `DEL`,
+`RENAME`, `SUNION`, `SINTERSTORE`, `ZUNIONSTORE`, `BITOP`, `PFCOUNT`, `PFMERGE`, `RPOPLPUSH`, `SMOVE`,
+`SORT ... STORE`, `EVAL` with several keys, `Json.mGet`, `Json.mSet`, ...) is routed by its first key, and Redis
+Cluster executes it only if **all its keys hash to one slot**. Put a hash tag in the keys so that they do:
+`{user:1}:name` and `{user:1}:email` are in the same slot, because only the part between the braces is hashed.
+
+Keys in different slots fail the future with `RedisClusterErrorResponseException(CrossSlot, ...)`, whose message
+is `CROSSSLOT Keys in request don't hash to the same slot`, and nothing is written. rescredis does not split the
+command into several (that would lose the atomicity of `MSET` and `JSON.MSET`) and does not retry `CROSSSLOT`.
+Redis does not check the keys of `JSON.MGET` (it knows only the first one), so `RedisCluster` itself fails
+`Json.mGet` with the same `CROSSSLOT` error when the keys are in different slots.
+
+```scala
+val cluster = RedisCluster(Server("localhost", 7000))
+cluster.mSet(Map("{user:1}:name" -> "Ann", "{user:1}:email" -> "ann@example.org"))   // one slot: works
+cluster.mSet(Map("user:1:name" -> "Ann", "user:2:name" -> "Bob"))                      // CROSSSLOT
 ```
 
 ## JSON
@@ -219,12 +245,17 @@ and a Redis cluster on ports 7000-7005. They run in Docker containers only; see 
 
 ## API notes
 
-* `auth("")` means "no password", for `Redis`, `Client`, `BlockingClient` and `SubscriberClient`.
-  Redis 6.2 and later refuse `AUTH ""` when the server has no password, so it is sent as
-  `AUTH default ""`: it succeeds when the server has no password set and fails with an error when it has
-  one. The stored credentials are cleared, so a reconnect does not send `AUTH`, and subscriptions are kept.
+* Credentials are not rewritten. `auth(password, username = None)` (on `Redis`, `Client`, `BlockingClient` and
+  `SubscriberClient`) sends `AUTH <password>` or `AUTH <username> <password>` exactly as given, and returns the
+  Redis error if the server refuses it. Only when the server accepts it, the credentials become those of the
+  connection: it sends them again every time it reconnects; when it is refused they stay as they were. The
+  credentials the connection was constructed with (`authOpt`, or `scredis.redis.password` in the configuration)
+  are sent when it connects and on every reconnect; with no `authOpt` no `AUTH` is sent. A refusal at connect or
+  reconnect is logged by the connection with the Redis error.
+* `clearCredentials()` (on the same four classes) removes the credentials of the connection: no `AUTH` is sent
+  on later reconnects. It sends nothing to Redis, and the connection stays authenticated until it is closed.
 * `Redis.auth(password, username)` authenticates the non-blocking, the blocking and the subscriber client with
-  the same user name.
+  the same user name; `Redis.clearCredentials()` clears them on all of them.
 * Replies of Redis 7 are supported: `CLUSTER SLOTS` (node metadata), `COMMAND` / `COMMAND INFO` (extra
   fields) and `ROLE` (replication states `handshake`, `none` and `unknown` in `Role.ReplicationState`).
 

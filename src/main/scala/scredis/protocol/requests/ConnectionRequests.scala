@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: Scala 3 compatibility; adapted to Redis 7.4 (auth).
+// Modified by Sopranoworks: Scala 3 compatibility; adapted to Redis 7.4 (auth); AUTH is sent as given.
 package scredis.protocol.requests
 
 import scredis.protocol._
@@ -43,14 +43,7 @@ object ConnectionRequests {
     }
   }
 
-  /**
-   * The arguments of AUTH. The empty password without a username means "no password" and is sent
-   * as `AUTH default ""`: the single-argument `AUTH ""` is refused by Redis 6.2 and later when the
-   * server has no password, whereas the two-argument form is accepted for the default user when it
-   * has none (and fails with WRONGPASS when the server does require a password).
-   */
-  private def authParams(username: Option[String], password: String): List[String] = {
-    if (username.isEmpty && password.isEmpty) List("default", password)
-    else List(username, Some(password)).flatten
-  }
+  /** The arguments of AUTH, as given: `AUTH <password>` or `AUTH <username> <password>`. */
+  private def authParams(username: Option[String], password: String): List[String] =
+    List(username, Some(password)).flatten
 }
