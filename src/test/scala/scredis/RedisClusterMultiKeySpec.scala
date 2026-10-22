@@ -15,8 +15,8 @@ import scala.concurrent.{ExecutionContext, Future}
 /**
  * Commands with several keys on `RedisCluster`: Redis Cluster executes them only when all keys hash to
  * one slot (use a hash tag, `{tag}`) and answers `CROSSSLOT` otherwise. The cluster client does not split
- * them. `JSON.MGET` is the exception on the server (it declares only its first key, so Redis answers
- * with a nil for every key of another node); there the cluster client answers `CROSSSLOT` itself.
+ * them. `JSON.MGET` is the exception: the module declares only its first key, so Redis raises no `CROSSSLOT`
+ * and answers a nil for the keys of other nodes (pinned by a test that documents the module).
  * Needs the cluster on ports 7000 - 7005 with the JSON module, see testing.md.
  */
 class RedisClusterMultiKeySpec extends AnyWordSpec with Matchers with ScalaFutures with BeforeAndAfterAll {
@@ -122,12 +122,13 @@ class RedisClusterMultiKeySpec extends AnyWordSpec with Matchers with ScalaFutur
       cluster.del(kb).futureValue
     }
 
-    "fail with CROSSSLOT, not with a nil for the key of another node: Json.mGet" in {
+    "document the module: JSON.MGET with keys on two nodes returns the first key's value and None for the other (RedisJSON 2.8.8, Redis 7.4.2)" in {
       cluster.Json.set(ka, "$", 1).futureValue
       cluster.Json.set(kb, "$", 2).futureValue
-      shouldBeCrossSlot(cluster.Json.mGetRaw(Seq(ka, kb)))
-      shouldBeCrossSlot(cluster.Json.mGet[Int](Seq(kb, ka)))
-      // one key, or keys of one slot, are not affected
+      // not a guarantee of rescredis: the module declares only its first key to Redis, which raises no CROSSSLOT
+      cluster.Json.mGet[Int](Seq(ka, kb)).futureValue should be (List(Some(List(Some(1))), None))
+      cluster.Json.mGet[Int](Seq(kb, ka)).futureValue should be (List(Some(List(Some(2))), None))
+      // keys in one slot, or the same key twice
       cluster.Json.mGet[Int](Seq(ka, ka)).futureValue should be (List(Some(List(Some(1))), Some(List(Some(1)))))
       cluster.del(ka).futureValue
       cluster.del(kb).futureValue

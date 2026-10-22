@@ -164,9 +164,9 @@ object JsonRequests {
 
   case class JsonMGet(keys:Seq[String], path:String) extends Request[List[Option[Json]]](
     JsonMGet, (keys ++ List(path)).map(UTF8StringWriter.write):_*
-  ) with SameSlotKeys with OptJsonArrayDecoder {
-    // in a cluster the request goes to the node of the first key, so all keys must be in one slot; the server
-    // does not check that (it knows only the first key), RedisCluster does
+  ) with Key with OptJsonArrayDecoder {
+    // in a cluster the request goes to the node of the first key; the module declares only that key to Redis,
+    // so keys of other slots come back as nil (see the README, Cluster)
     override val key: String = keys.head
   }
 

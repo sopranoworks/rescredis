@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: Scala 3 compatibility; configuration per build variant; CROSSSLOT for keys in different slots of JSON.MGET.
+// Modified by Sopranoworks: Scala 3 compatibility; configuration per build variant.
 package scredis.io
 
 import akka.actor.ActorSystem
@@ -297,11 +297,6 @@ abstract class ClusterConnection(
           case None => Future.failed(RedisIOException(s"No cluster slot information available for $slot"))
           case Some(server) => send(req, server)
         }
-
-      case keysReq: Request[A] with SameSlotKeys if keysReq.keys.map(ClusterCRC16.getSlot).distinct.size > 1 =>
-        Future.failed(RedisClusterErrorResponseException(
-          CrossSlot, "CROSSSLOT Keys in request don't hash to the same slot"
-        ))
 
       case keyReq: Request[A] with Key =>
         hashSlots(ClusterCRC16.getSlot(keyReq.key)) match {

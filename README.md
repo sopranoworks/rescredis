@@ -152,8 +152,10 @@ Cluster executes it only if **all its keys hash to one slot**. Put a hash tag in
 Keys in different slots fail the future with `RedisClusterErrorResponseException(CrossSlot, ...)`, whose message
 is `CROSSSLOT Keys in request don't hash to the same slot`, and nothing is written. rescredis does not split the
 command into several (that would lose the atomicity of `MSET` and `JSON.MSET`) and does not retry `CROSSSLOT`.
-Redis does not check the keys of `JSON.MGET` (it knows only the first one), so `RedisCluster` itself fails
-`Json.mGet` with the same `CROSSSLOT` error when the keys are in different slots.
+`JSON.MGET` is routed by its first key too, but the module declares only that key to Redis, so Redis raises no
+`CROSSSLOT`: on RedisJSON 2.8.8 the keys that hash to other slots come back as `None`, without an error (the
+first key's value is returned). rescredis returns what Redis answers; use one slot (a hash tag) for multi-key
+JSON reads.
 
 ```scala
 val cluster = RedisCluster(Server("localhost", 7000))

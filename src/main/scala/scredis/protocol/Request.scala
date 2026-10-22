@@ -1,4 +1,3 @@
-// Modified by Sopranoworks: SameSlotKeys.
 package scredis.protocol
 
 import java.nio.ByteBuffer
@@ -12,14 +11,6 @@ import scala.concurrent.{Future, Promise}
   * Needed to handle cluster sharding. */
 trait Key {
   val key: String
-}
-
-/** A request with several keys that Redis does not check for a common slot: the cluster client does,
-  * and fails the request with `CROSSSLOT`, like Redis does for the other multi-key commands.
-  * (`JSON.MGET` declares only its first key to Redis, which answers with a nil for every key that
-  * the node of the first key does not hold.) */
-trait SameSlotKeys extends Key {
-  def keys: Seq[String]
 }
 
 /** Marker trait for requests that make sense on any member of a cluster. */

@@ -1,6 +1,7 @@
+// Modified by Sopranoworks: an unexpected reply is a RedisProtocolException, not an error response of Redis.
 package scredis.protocol.requests
 
-import scredis.exceptions.RedisErrorResponseException
+import scredis.exceptions.RedisProtocolException
 import scredis.protocol._
 import scredis.protocol.requests.GeoAddEntries.GeoAddEntry
 import scredis.protocol.requests.GeoDistUnit.GeoDistUnit
@@ -84,7 +85,7 @@ object GeoRequests {
             }
           }.flatten match {
             case name :: distance :: longS :: latS :: _ => RadiusResult(name, distance.toDouble, longS.toDouble, latS.toDouble)
-            case other => throw RedisErrorResponseException(s"Response from Redis in unexpected format: $other")
+            case other => throw RedisProtocolException(s"Response from Redis in unexpected format: $other")
         }
       }
     }
@@ -113,7 +114,7 @@ object GeoRequests {
           }
         }.flatten match {
           case name :: distance :: longS :: latS :: _ => RadiusResult(name, distance.toDouble, longS.toDouble, latS.toDouble)
-          case other => throw RedisErrorResponseException(s"Response from Redis in unexpected format: $other")
+          case other => throw RedisProtocolException(s"Response from Redis in unexpected format: $other")
         }
       }
     }

@@ -2,7 +2,7 @@
 
 ### Running the benchmarks
 
-- Uncomment [scredis.ClientBenchmark](https://github.com/scredis/scredis/blob/master/src/test/scala/scredis/ClientBenchmark.scala)
+- Uncomment [scredis.ClientBenchmark](https://github.com/sopranoworks/rescredis/blob/main/src/bench/scala/scredis/ClientBenchmark.scala)
 - Run `redis-server` with default configuration (port = 6379, no password)
 - Run `test-only *ClientBenchmark*` via sbt
 - It can take quite some time to complete, usually about 15 minutes
