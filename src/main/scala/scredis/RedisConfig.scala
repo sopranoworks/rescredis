@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: Scala 3 compatibility; configuration key and normalisation per build variant.
+// Modified by Sopranoworks: Scala 3 compatibility; configuration key and normalisation per build variant; reconnect backoff.
 package scredis
 
 import com.typesafe.config.{Config, ConfigFactory}
@@ -96,6 +96,13 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
       val IODispatcherPath = config.getString("io-dispatcher-path")
       val ListenerDispatcherPath = config.getString("listener-dispatcher-path")
       val DecoderDispatcherPath = config.getString("decoder-dispatcher-path")
+    }
+
+    object Reconnect {
+      private implicit val config: Config = IO.config.getConfig("reconnect")
+
+      val MinBackoff = parseFiniteDuration("min-backoff")
+      val MaxBackoff = parseFiniteDuration("max-backoff")
     }
 
     object Cluster {

@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: WAIT (Wait, and WaitRoutedBy for a cluster).
 package scredis.protocol.requests
 
 import scala.language.higherKinds
@@ -36,6 +37,7 @@ object KeyRequests {
   object Sort extends Command("SORT")
   object TTL extends Command("TTL")
   object Type extends Command("TYPE")
+  object Wait extends Command("WAIT")
   
   protected def generateSortArgs(
     key: String,
@@ -303,6 +305,23 @@ object KeyRequests {
     override def decode = {
       case SimpleStringResponse("none") => None
       case SimpleStringResponse(value)  => Some(scredis.Type(value))
+    }
+  }
+
+  case class Wait(numReplicas: Int, timeoutMillis: Long) extends Request[Long](Wait, numReplicas, timeoutMillis) {
+    override def decode = {
+      case IntegerResponse(value) => value
+    }
+  }
+
+  /**
+   * `WAIT numreplicas timeout`, sent by a cluster client to the master of `key`'s slot: `key` only chooses the
+   * connection (WAIT has no key; Redis applies it to the connection it is sent on) and is not sent.
+   */
+  case class WaitRoutedBy(key: String, numReplicas: Int, timeoutMillis: Long)
+    extends Request[Long](Wait, numReplicas, timeoutMillis) with Key {
+    override def decode = {
+      case IntegerResponse(value) => value
     }
   }
 

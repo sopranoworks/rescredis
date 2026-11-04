@@ -15,6 +15,13 @@
 #                   JSON tests run through RedisCluster. The other Redis Stack modules are not
 #                   loaded (the suite does not use them on the cluster, and RediSearch and
 #                   RedisGears need a coordinator setup of their own in cluster mode)
+#   * 6390, 6391    a master and its replica (replicaof 127.0.0.1 6390), no password, no modules:
+#                   WAIT (WaitCommandSpec)
+#   * 7100 - 7105   a second Redis cluster (3 masters, 3 replicas, cluster-node-timeout 2000) for
+#                   the failover tests (ReplyPairingSpec, ClusterBlockingSpec), which kill masters
+#                   with DEBUG SEGFAULT (enable-debug-command local). Every node runs in a loop that
+#                   starts it again 6 s after it died (after its replica has taken over), so it
+#                   rejoins as a replica and the cluster is whole again for the next test
 #
 # All containers share one network namespace (owned by the first one), so every server is
 # reachable as 127.0.0.1 from every other one and from the test container. The suite relies on
@@ -36,6 +43,8 @@ REDIS_IMAGE="${REDIS_IMAGE:-redis/redis-stack-server:7.4.0-v2}"
 SBT_IMAGE="${SBT_IMAGE:-sbtscala/scala-sbt:eclipse-temurin-17.0.20_8_1.13.0_3.3.8}"
 SINGLE_NAME=scredis-test-redis
 CLUSTER_NAME=scredis-test-redis-cluster
+REPLICA_NAME=scredis-test-redis-replica
+FAILOVER_NAME=scredis-test-redis-failover
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Redis Stack modules, as loaded by the image's own entrypoint
@@ -51,6 +60,8 @@ start() {
   docker run -d --rm --name "$SINGLE_NAME" \
     -p 6379:6379 -p 6380:6380 \
     -p 7000:7000 -p 7001:7001 -p 7002:7002 -p 7003:7003 -p 7004:7004 -p 7005:7005 \
+    -p 6390:6390 -p 6391:6391 \
+    -p 7100:7100 -p 7101:7101 -p 7102:7102 -p 7103:7103 -p 7104:7104 -p 7105:7105 \
     -v "$ROOT/src/test/resources/redis-6380.conf:/conf/redis-6380.conf:ro" \
     --entrypoint sh "$REDIS_IMAGE" -c "
       mkdir -p /data/6380 && cd /opt/redis-stack
@@ -74,6 +85,32 @@ start() {
       exec sleep infinity' \
     >/dev/null
 
+  docker run -d --rm --name "$REPLICA_NAME" --network "container:$SINGLE_NAME" \
+    --entrypoint sh "$REDIS_IMAGE" -c '
+      mkdir -p /data/6390 /data/6391
+      /opt/redis-stack/bin/redis-server --port 6390 --dir /data/6390 --bind 0.0.0.0 --protected-mode no \
+        --daemonize yes >/dev/null
+      exec /opt/redis-stack/bin/redis-server --port 6391 --dir /data/6391 --bind 0.0.0.0 --protected-mode no \
+        --replicaof 127.0.0.1 6390 --daemonize no' \
+    >/dev/null
+
+  docker run -d --rm --name "$FAILOVER_NAME" --network "container:$SINGLE_NAME" \
+    --entrypoint sh "$REDIS_IMAGE" -c '
+      for p in 7100 7101 7102 7103 7104 7105; do
+        mkdir -p /data/$p
+        ( while true; do
+            /opt/redis-stack/bin/redis-server --port $p --dir /data/$p --bind 0.0.0.0 --protected-mode no \
+              --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 2000 \
+              --enable-debug-command local --appendonly yes --daemonize no >>/data/$p/server.log 2>&1
+            sleep 6
+          done ) &
+      done
+      until redis-cli -p 7105 ping >/dev/null 2>&1; do sleep 0.2; done
+      redis-cli --cluster create 127.0.0.1:7100 127.0.0.1:7101 127.0.0.1:7102 \
+        127.0.0.1:7103 127.0.0.1:7104 127.0.0.1:7105 --cluster-replicas 1 --cluster-yes
+      exec sleep infinity' \
+    >/dev/null
+
   echo "waiting for Redis on 6379 and 6380 ..."
   for i in $(seq 1 60); do
     if docker exec "$SINGLE_NAME" redis-cli -p 6379 ping >/dev/null 2>&1 \
@@ -90,19 +127,31 @@ start() {
     fi
     sleep 1
   done
+
+  echo "waiting for the replica on 6391 and the failover cluster on 7100-7105 ..."
+  for i in $(seq 1 120); do
+    if docker exec "$REPLICA_NAME" redis-cli -p 6391 info replication 2>/dev/null | grep -q 'master_link_status:up' \
+      && docker exec "$FAILOVER_NAME" redis-cli -p 7100 cluster info 2>/dev/null | grep -q 'cluster_state:ok'; then
+      break
+    fi
+    sleep 1
+  done
   status
 }
 
 stop() {
-  docker stop "$CLUSTER_NAME" "$SINGLE_NAME" 2>/dev/null || true
+  docker stop "$FAILOVER_NAME" "$REPLICA_NAME" "$CLUSTER_NAME" "$SINGLE_NAME" 2>/dev/null || true
 }
 
 status() {
   docker ps --filter "name=$SINGLE_NAME" --filter "name=$CLUSTER_NAME" \
+    --filter "name=$REPLICA_NAME" --filter "name=$FAILOVER_NAME" \
     --format '{{.ID}}  {{.Names}}  {{.Image}}  {{.Status}}'
   docker image inspect "$REDIS_IMAGE" --format 'image {{index .RepoDigests 0}}' 2>/dev/null || true
   for spec in "$SINGLE_NAME 6379" "$SINGLE_NAME 6380" "$CLUSTER_NAME 7000" "$CLUSTER_NAME 7001" \
-              "$CLUSTER_NAME 7002" "$CLUSTER_NAME 7003" "$CLUSTER_NAME 7004" "$CLUSTER_NAME 7005"; do
+              "$CLUSTER_NAME 7002" "$CLUSTER_NAME 7003" "$CLUSTER_NAME 7004" "$CLUSTER_NAME 7005" \
+              "$REPLICA_NAME 6390" "$REPLICA_NAME 6391" "$FAILOVER_NAME 7100" "$FAILOVER_NAME 7101" \
+              "$FAILOVER_NAME 7102" "$FAILOVER_NAME 7103" "$FAILOVER_NAME 7104" "$FAILOVER_NAME 7105"; do
     set -- $spec
     auth=()
     if [ "$2" = 6380 ]; then auth=(-a foobar --no-auth-warning); fi

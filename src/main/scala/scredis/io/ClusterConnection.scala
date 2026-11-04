@@ -1,4 +1,7 @@
-// Modified by Sopranoworks: Scala 3 compatibility; configuration per build variant.
+// Modified by Sopranoworks: Scala 3 compatibility; configuration per build variant; a request sent again (after MOVED, ASK,
+// TRYAGAIN, CLUSTERDOWN or a connection error) is a copy, never the same request object; a node's connection is kept after errors
+// (it reconnects with the backoff) instead of being replaced by a new one; requests sent to every master (keyless script
+// commands); the slot cache and the actor system for the cluster's blocking client.
 package scredis.io
 
 import akka.actor.ActorSystem
@@ -45,7 +48,6 @@ abstract class ClusterConnection(
   type CONNECTIONS = Map[Server, (AkkaNonBlockingConnection, Int)]
 
   private val maxHashMisses = RedisConfigDefaults.Redis.MaxClusterHashMisses
-  private val maxConnectionMisses = 3
 
   // Externally provided ActorSystem must be closed by caller.
   // Only internally created ActorSystem is stopped automatically on shutdown.
@@ -159,7 +161,9 @@ abstract class ClusterConnection(
   }
 
   /**
-   * Send a Redis request object and handle cluster specific error cases
+   * Send a Redis request object and handle cluster specific error cases. A retry sends a copy of the request
+   * ([[scredis.protocol.Request.copyForResend]]): the request object that failed may still be held by the
+   * connection it was sent on, and one object in two connections would pair a reply of one with the other.
    * @param request request object
    * @param server server to contact
    * @param retry remaining retries
@@ -181,38 +185,33 @@ abstract class ClusterConnection(
       connection.send(request).recoverWith {
 
         case err @ RedisClusterErrorResponseException(Moved(slot, host, port), _) =>
-          request.reset()
           // this will usually happen when cache is missed.
           val movedServer: Server = Server(host, port)
           updateHashMisses(slot, movedServer)
 
-          send(request, movedServer, triedServers+server, retry - 1, remainingTimeout, Option(err))
+          send(request.copyForResend(), movedServer, triedServers+server, retry - 1, remainingTimeout, Option(err))
 
         case err @ RedisClusterErrorResponseException(Ask(hashSlot, host, port), _) =>
-          request.reset()
           val askServer = Server(host,port)
-          send(request, askServer, triedServers+server, retry - 1, remainingTimeout, Option(err))
+          send(request.copyForResend(), askServer, triedServers+server, retry - 1, remainingTimeout, Option(err))
 
         case err @ RedisClusterErrorResponseException(TryAgain, _) =>
-          request.reset()
           // TODO what is actually the intended semantics of TryAgain?
-          delayed(tryAgainWait) { send(request, server, triedServers+server, retry - 1, remainingTimeout - tryAgainWait, Option(err)) }
+          delayed(tryAgainWait) { send(request.copyForResend(), server, triedServers+server, retry - 1, remainingTimeout - tryAgainWait, Option(err)) }
 
         case err @ RedisClusterErrorResponseException(ClusterDown, _) =>
-          request.reset()
           logger.debug(s"Received CLUSTERDOWN error from request $request. Retrying ...")
           val nextTimeout = remainingTimeout - clusterDownWait
           if (nextTimeout <= 0.millis) Future.failed(RedisIOException(s"Aborted request $request after trying for ${connectTimeout}", err))
-          else delayed(clusterDownWait) { send(request, server, triedServers, retry, nextTimeout, Option(err)) }
+          else delayed(clusterDownWait) { send(request.copyForResend(), server, triedServers, retry, nextTimeout, Option(err)) }
           // wait a bit because the cluster may not be fully initialized or fixing itself
 
         case err @ RedisIOException(message, cause) =>
-          request.reset()
           updateServerErrors(server)
           val nextTriedServers = triedServers + server
           // try any server that isn't one we tried already
           connections.keys.find { s => !nextTriedServers.contains(s) } match {
-            case Some(nextServer) => send(request, nextServer, nextTriedServers, retry, remainingTimeout, Option(err))
+            case Some(nextServer) => send(request.copyForResend(), nextServer, nextTriedServers, retry, remainingTimeout, Option(err))
             case None => Future.failed(RedisIOException("No valid connection available.", err))
           }
       }
@@ -233,37 +232,18 @@ abstract class ClusterConnection(
     }
   }
 
-  /** Called when `server` has an error to increase its error counter and remove when errors exceed a threshold. */
+  /**
+   * Called when `server` has an error: counts it. The connection is kept; its listener reconnects with the backoff
+   * (`scredis.io.reconnect`). Closing it after a few errors, as before, made the next request to the server create
+   * a new connection, whose first attempt is immediate: while a node was down (or answered by something that
+   * closes connections), that was a loop of new connections.
+   */
   private def updateServerErrors(server: Server): Unit = this.synchronized {
     for {
       (con, errors) <- connections.get(server)
     } {
-      val nextConnections =
-        if (errors >= maxConnectionMisses) removeServerFromConnectionsUnsafe(con, server)
-        else connections.updated(server, (con, errors + 1))
-
-      this.connections =
-        if (nextConnections.isEmpty) {
-          // TODO how quickly will this happen when a node is failing?
-          // will we have a constant slew of re-init attempts when all is kaput?
-          logger.warn(
-            "No cluster node connection alive. " +
-            s"Attempting to recover with initial node configuration: $nodes")
-          initialConnections
-        }
-        else nextConnections
+      connections = connections.updated(server, (con, errors + 1))
     }
-  }
-
-  /** Should be called only within a synchronized block
-   * Marks the connection to be closed later.
-   * Returns new [[CONNECTIONS]] with the server removed
-   * */
-  private def removeServerFromConnectionsUnsafe(connToRemove: AkkaNonBlockingConnection, server: Server): CONNECTIONS = {
-    closeConnection(connToRemove).onComplete { result =>
-      logger.info(s"Connection to ${connToRemove.host}:${connToRemove.port} closed with result $result")
-    }
-    connections - server
   }
 
   private def closeConnection(connToRemove: NonBlockingConnection): Future[Unit] = {
@@ -315,6 +295,33 @@ abstract class ClusterConnection(
         // TODO what to do about non-key requests? they would be valid for any individual cluster node,
         // but arbitrary choice is probably not what's intended..
         Future.failed(RedisInvalidArgumentException("This command is not supported for clusters"))
+    }
+
+  /** The actor system of the connections (the caller's, or the one created for this cluster) */
+  private[scredis] def actorSystem: ActorSystem = system
+
+  /** The master of `slot`, as the slot cache has it */
+  private[scredis] def masterOf(slot: Int): Option[Server] = hashSlots(slot)
+
+  /** A MOVED reply said that `slot` is served by `server` */
+  private[scredis] def slotMoved(slot: Int, server: Server): Unit = updateHashMisses(slot, server)
+
+  /** Reads the slots and their masters from the cluster again (CLUSTER SLOTS) */
+  private[scredis] def refreshSlots(): Future[Unit] = updateCache(maxRetries)
+
+  /**
+   * Sends a request made by `request` to every master, each on its own connection, without the retries of [[send]]
+   * (the request is meant for each of these nodes, not for any one). The masters are read from the cluster first
+   * (CLUSTER SLOTS), so that a failover since the last update is seen; if that fails, those of the slot cache.
+   * The replies in the order of the masters, or the first failure.
+   */
+  private[scredis] def sendToMasters[A](request: () => Request[A]): Future[Seq[A]] =
+    refreshSlots().recover { case _ => () }.flatMap { _ =>
+      val masters = hashSlots.flatten.distinct
+      if (masters.isEmpty) Future.failed(RedisIOException("No cluster slot information available"))
+      else Future.sequence(masters.map { server =>
+        connections.getOrElse(server, createConnectionIfMissing(server))._1.send(request())
+      })
     }
 
   def quit(): Future[Unit] = {

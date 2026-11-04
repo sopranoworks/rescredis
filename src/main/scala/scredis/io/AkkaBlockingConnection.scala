@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: credentials kept only once accepted.
+// Modified by Sopranoworks: credentials kept only once accepted; closeAsync.
 package scredis.io
 
 import java.util.concurrent.locks.ReentrantLock
@@ -6,9 +6,10 @@ import java.util.concurrent.locks.ReentrantLock
 import akka.actor._
 import scredis.exceptions._
 import scredis.protocol._
+import scredis.protocol.requests.ConnectionRequests.Quit
 import scredis.util.UniqueNameGenerator
 
-import scala.concurrent.Await
+import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.util.Try
 
@@ -91,6 +92,16 @@ abstract class AkkaBlockingConnection(
     updateState(request)
     val future = keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))
     Try(Await.result(future, timeout))
+  }
+
+  /**
+   * Sends QUIT without waiting for it: after a call has timed out on the client side the connection may still be
+   * blocked in Redis, and QUIT is answered only after the blocked command.
+   */
+  private[scredis] def closeAsync(): Future[Unit] = {
+    val quit = Quit()
+    updateState(quit)
+    Protocol.send(quit, listenerActor)
   }
   
 }

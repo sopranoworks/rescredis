@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: documentation fix backported from upstream scredis (52dfd27).
+// Modified by Sopranoworks: documentation fix backported from upstream scredis (52dfd27); WAIT.
 package scredis.commands
 
 import scala.language.postfixOps
@@ -444,5 +444,29 @@ trait KeyCommands { self: NonBlockingConnection =>
    * @since 1.0.0
    */
   def `type`(key: String): Future[Option[scredis.Type]] = send(Type(key))
+
+  /**
+   * Blocks until the writes sent before it on this connection have been acknowledged by at least `numReplicas`
+   * replicas, or the timeout is over (WAIT).
+   *
+   * `WAIT numreplicas timeout`
+   *
+   * Redis applies WAIT to the connection it is sent on: the writes it covers are those sent on the same connection
+   * before it (a `Client` or `Redis` has one connection, shared by everything sent through it). While WAIT blocks,
+   * the commands sent after it on the connection wait behind it, and the connection's receive timeout
+   * (`scredis.io.receive-timeout`) still applies: a timeout of 0 (no limit) or above the receive timeout ends in a
+   * receive timeout if the replicas do not answer before it. On a replica Redis answers an error, which is returned.
+   *
+   * On [[scredis.RedisCluster]] this form is not supported (WAIT has no key to route it by); use
+   * `RedisCluster.wait(key, numReplicas, timeout)`, which sends it to the master of the key's slot.
+   *
+   * @param numReplicas the number of replicas that must have acknowledged the writes
+   * @param timeout the longest time to block, in milliseconds on the wire; 0 blocks without limit
+   * @return the number of replicas that acknowledged the writes, as Redis answers it (it can be lower than
+   * `numReplicas` when the timeout is over, or higher)
+   *
+   * @since 3.0.0
+   */
+  def wait(numReplicas: Int, timeout: FiniteDuration): Future[Long] = send(Wait(numReplicas, timeout.toMillis))
   
 }

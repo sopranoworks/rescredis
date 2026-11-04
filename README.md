@@ -37,19 +37,23 @@ stream commands in 1.1.0.
 Changes:
 
 * 1.1.0 (in development, `1.1.0-SNAPSHOT`): stream commands `XADD`, `XLEN`, `XRANGE`, `XREVRANGE`, `XDEL`,
-  `XTRIM`, `XREAD` and `XREAD ... BLOCK` (see "Streams"); consumer groups are not included yet.
+  `XTRIM`, `XREAD` and `XREAD ... BLOCK` (see "Streams"); consumer groups are not included yet. Fix (inherited
+  from scredis): after a connection died, a reply could complete another request, or a request never completed,
+  on `Client`, `Redis`, their blocking and subscriber clients, and `RedisCluster` (see "Connections").
+  Reconnecting with a backoff, logged once per change. `WAIT`; on `RedisCluster`: `wait(key, ...)`,
+  `SCRIPT LOAD` / `EXISTS` / `FLUSH` sent to every master, and a blocking client (`RedisCluster.blocking`).
 
 ## Features
 * Supports all Redis commands up to v3.0.0
 * Built on top of Akka (rescredis) or Apache Pekko (rescredis-pekko) non-blocking IO
-* Automatic reconnection
+* Automatic reconnection, with a backoff
 * Automatic pipelining
 * Transactions
 * Pub/Sub
   * Subscribe selectively with partial functions
   * Tracked Subscribe and Unsubscribe commands (they return a Future as any other commands)
   * Automatically resubscribes to previously subscribed channels/patterns upon reconnection
-* Cluster support via `RedisCluster`
+* Cluster support via `RedisCluster`, with blocking commands (`RedisCluster.blocking`)
 * JSON commands (Redis Stack / RedisJSON) on `Client`, `Redis` and `RedisCluster`: `client.Json.set(...)`
 * Stream commands (`XADD`, `XRANGE`, `XREAD`, ...; `XREAD ... BLOCK` on the blocking client)
 * Customizable serialization and deserialization of command inputs and outputs
@@ -94,6 +98,42 @@ The configuration keys differ per artifact:
   and is not touched). Write a key under one of them, not both: if the same key is set under both, the `akka`
   value is used. Values are not translated and must be valid for Pekko; for example, a mailbox type must be
   `org.apache.pekko.dispatch.BoundedMailbox`.
+
+### Connections
+
+**Replies.** A connection pairs the n-th reply with the n-th request it sent. When a connection dies (the server
+crashed or restarted, the connection was reset, a master failed over), every request sent on it that has no reply
+yet fails with a `RedisIOException`; requests waiting to be sent go out on the new connection. A reply completes
+only the request it belongs to: a request gets its own reply or fails, never another request's. (scredis, and
+rescredis up to 1.0.0, could complete a request with the reply of another one after a connection died, or leave
+a request without an answer; see the 1.1.0 change above.) A request sent again by `RedisCluster` after `MOVED`,
+`ASK`, `TRYAGAIN`, `CLUSTERDOWN` or a connection error is the same command, as a new request object.
+
+**Reconnecting.** After the loss of a connection on which Redis had answered, the first attempt is made at once.
+After an attempt that fails (no connection, or a connection closed before Redis answered on it, as through a
+forwarder or load balancer whose server is down), the next one waits `min-backoff`, then twice as long each time,
+up to `max-backoff`:
+
+```
+scredis.io.reconnect {
+  min-backoff = 100 milliseconds   # default
+  max-backoff = 2 seconds          # default
+}
+```
+
+These two are read from the application's configuration for every client (as `max-cluster-hash-misses`).
+Requests sent while an attempt is in progress wait for it and fail if it fails; requests sent while the client
+waits for its next attempt fail at once with a `RedisIOException` (so `RedisCluster` sends them to another node),
+as do all requests with `fail-command-on-connecting = true`. The connection logs the loss once (warning, with the
+cause) and its return once (info, with the number of attempts and the time); single attempts are logged at debug
+level, without stack traces. The receive timeout (`scredis.io.receive-timeout`) covers every request waiting for
+its reply. A `RedisCluster` keeps a node's connection after errors; it reconnects with the backoff.
+
+**WAIT.** `wait(numReplicas, timeout)` on `Client`, `Redis` and transactions sends `WAIT numreplicas timeout`
+(timeout in milliseconds, 0 = no limit) and returns what Redis answers (the number of replicas that acknowledged
+the writes). Redis applies it to the connection it is sent on: the writes sent before it on the same connection.
+While it blocks, the commands sent after it on that connection wait behind it, and the receive timeout applies to
+it. On a replica Redis answers an error. For `RedisCluster` see "Cluster".
 
 ### Quick example
 ```scala
@@ -168,6 +208,41 @@ JSON reads.
 val cluster = RedisCluster(Server("localhost", 7000))
 cluster.mSet(Map("{user:1}:name" -> "Ann", "{user:1}:email" -> "ann@example.org"))   // one slot: works
 cluster.mSet(Map("user:1:name" -> "Ann", "user:2:name" -> "Bob"))                      // CROSSSLOT
+```
+
+**WAIT.** `WAIT` has no key, and Redis applies it to the connection it is sent on. `cluster.wait(key, numReplicas,
+timeout)` sends `WAIT numreplicas timeout` on the connection to the master of `key`'s slot (the key is not sent):
+the connection that writes to keys of that slot went through (`RedisCluster` has one connection per node). Nothing
+else is done on the client side; when the slot cache is out of date WAIT may reach another node (a replica answers
+an error). `cluster.wait(numReplicas, timeout)` without a key fails with `RedisInvalidArgumentException`, as other
+keyless commands do.
+
+```scala
+cluster.set("{room:7}:state", bytes).flatMap(_ => cluster.wait("{room:7}:state", 1, 100.millis))  // Future[Long]
+```
+
+**Scripts.** `scriptLoad`, `scriptExists` and `scriptFlush` have no key; on `RedisCluster` they are sent to every
+master (read from the cluster with `CLUSTER SLOTS` first), which is the routing a keyless script command needs on a
+cluster (the command is not changed). `scriptLoad` returns the SHA1 once every master has answered it (it is the
+same on every node); `scriptExists` is true for a script only if every master has it; an error from any master
+fails the call with that error. The script cache is not replicated: a master added later, or a replica promoted by
+a failover, does not have the script, and `EVALSHA` there is answered `NOSCRIPT` (a
+`RedisErrorResponseException`); load it again, or use `EVAL`. `SCRIPT KILL` is still not supported on
+`RedisCluster` (it would have to go to the node that runs the script).
+
+**Blocking commands.** `cluster.blocking` has `blPop`, `brPop`, `brPopLPush` and `xRead(blockMillis, ...)` with
+the signatures of `Redis.blocking`. A call is routed by its (first, or source) key to the master of the key's slot,
+on a blocking connection of its own to that node, so a blocked call does not delay the cluster's other commands;
+one call is made at a time, as on `Redis.blocking`. Keys in different slots are sent as they are (Redis answers
+`CROSSSLOT`). When the slot's master changes: a `MOVED` reply updates the slot cache and the call goes to the named
+node at once; on `CLUSTERDOWN`, `TRYAGAIN` or a failed connection the call waits (the reconnect backoff), reads the
+slots again and goes to the slot's master. Retries are made within the call's own timeout (the block time + 2 s,
+none for 0); the command is sent unchanged. When the timeout has passed the call fails with a `TimeoutException`
+and that node's blocking connection is replaced. A call whose node died after executing it is sent again: an
+element popped on the dead master is not returned.
+
+```scala
+cluster.blocking.blPop[String](5, "jobs")   // Try[Option[(String, String)]]
 ```
 
 ## Streams
@@ -281,8 +356,9 @@ Bug fixes in the JSON commands (all covered by tests that fail without them):
 rescredis and rescredis-pekko are tested against Redis 7.4.2 (Redis Stack, image
 `redis/redis-stack-server:7.4.0-v2`), on Scala 2.12, 2.13 and 3.
 
-The tests need Redis servers on ports 6379, 6380 (configured by `src/test/resources/redis-6380.conf`)
-and a Redis cluster on ports 7000-7005. They run in Docker containers only; see [testing.md](testing.md):
+The tests need Redis servers on ports 6379, 6380 (configured by `src/test/resources/redis-6380.conf`),
+a master with a replica on 6390 / 6391, a Redis cluster on ports 7000-7005 and a second one on 7100-7105 whose
+masters the failover tests kill. They run in Docker containers only; see [testing.md](testing.md):
 
 ```
 ./docker-redis.sh start

@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: copyForResend (a request object is sent on one connection only).
 package scredis.protocol
 
 import java.nio.ByteBuffer
@@ -22,6 +23,21 @@ abstract class Request[A](command: Command, args: Any*) {
   private var _bytes: Array[Byte] = null
   def future: Future[A] = promise.future
   val repliesCount = 1
+
+  /**
+   * A new request with the same command and arguments that decodes its reply in the same way, for sending this
+   * request again on another connection. A request object is sent on one connection only: a connection's listener
+   * pairs replies with the requests it holds, and the request's encoded buffer is released once it is written.
+   */
+  private[scredis] def copyForResend(): Request[A] = {
+    val original = this
+    new Request[A](command, args: _*) {
+      override val repliesCount: Int = original.repliesCount
+      override def decode: Decoder[A] = original.decode
+      override def isReadOnly: Boolean = original.isReadOnly
+      override def toString: String = original.toString
+    }
+  }
 
   /** Reset the state of this Request to reuse it. */
   private[scredis] def reset(): Unit = {

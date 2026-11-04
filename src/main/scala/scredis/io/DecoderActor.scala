@@ -1,4 +1,5 @@
-// Modified by Sopranoworks: a reply on the subscriber connection that cannot be decoded fails the pending request.
+// Modified by Sopranoworks: a reply on the subscriber connection that cannot be decoded fails the pending request; the
+// results of a subscriber partition name the connection the data came from.
 package scredis.io
 
 import akka.actor.{Actor, ActorLogging}
@@ -37,36 +38,36 @@ class DecoderActor(subscriptionOption: Option[Subscription]) extends Actor with 
             request.failure(RedisProtocolException("Could not decode response", e))
         }
       }
-    case SubscribePartition(data) =>
+    case SubscribePartition(data, connection) =>
       val buffer = data.asByteBuffer
       while (buffer.remaining > 0) {
         try {
           val result = Protocol.decodePubSubResponse(Protocol.decode(buffer))
           result match {
             case Left(ErrorResponse(message)) =>
-              sender() ! SubscriberListenerActor.Fail(message)
+              sender() ! SubscriberListenerActor.Fail(message, connection)
 
             case Right(msgEither) => msgEither match {
               case Right(m: PubSubMessage.Subscribe) =>
-                sender() ! SubscriberListenerActor.Complete(m)
+                sender() ! SubscriberListenerActor.Complete(m, connection)
 
               case Right(m: PubSubMessage.PSubscribe) =>
-                sender() ! SubscriberListenerActor.Complete(m)
+                sender() ! SubscriberListenerActor.Complete(m, connection)
 
               case Right(m: PubSubMessage.Unsubscribe) =>
-                sender() ! SubscriberListenerActor.Complete(m)
+                sender() ! SubscriberListenerActor.Complete(m, connection)
 
               case Right(m: PubSubMessage.PUnsubscribe) =>
-                sender() ! SubscriberListenerActor.Complete(m)
+                sender() ! SubscriberListenerActor.Complete(m, connection)
 
               case Right(m: PubSubMessage.Error) =>
-                sender() ! SubscriberListenerActor.Complete(m)
+                sender() ! SubscriberListenerActor.Complete(m, connection)
 
               case Right(m: PubSubMessage.Message) =>
               case Right(m: PubSubMessage.PMessage) =>
 
               case Left(value) =>
-                sender() ! SubscriberListenerActor.Confirm(value)
+                sender() ! SubscriberListenerActor.Confirm(value, connection)
             }
           }
           result match {
@@ -84,7 +85,7 @@ class DecoderActor(subscriptionOption: Option[Subscription]) extends Actor with 
             val msg = data.decodeString("UTF-8").replace("\r\n", "\\r\\n")
             log.error(s"Could not decode PubSubMessage: $msg", e)
             // the reply cannot be matched to a request: complete the pending request with an error
-            sender() ! SubscriberListenerActor.Fail(s"Could not decode reply: $msg")
+            sender() ! SubscriberListenerActor.Fail(s"Could not decode reply: $msg", connection)
         }
       }
     case x => log.error(s"Received unexpected message: $x")
@@ -94,5 +95,6 @@ class DecoderActor(subscriptionOption: Option[Subscription]) extends Actor with 
 
 object DecoderActor {
   case class Partition(data: ByteString, requests: Iterator[Request[_]], skip: Int)
-  case class SubscribePartition(data: ByteString)
+  /** Data of the subscriber connection number `connection` */
+  case class SubscribePartition(data: ByteString, connection: Int)
 }

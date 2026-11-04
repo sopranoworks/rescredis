@@ -1,4 +1,6 @@
-// Modified by Sopranoworks: every reply completes the pending request (status replies, errors, unmatched replies); QUIT fails what is outstanding.
+// Modified by Sopranoworks: every reply completes the pending request (status replies, errors, unmatched replies); QUIT fails what is outstanding;
+// the data of a connection is decoded in order by one decoder, results from an earlier connection are ignored, a partly answered request
+// fails when its connection is lost.
 package scredis.io
 
 import akka.util.ByteString
@@ -96,9 +98,16 @@ class SubscriberListenerActor(
     subscribedPatterns.clear()
   }
   
+  // The replies complete the pending requests in the order they arrive here, so the data of a connection goes to one
+  // decoder (in order) rather than to whichever has the smallest mailbox; each result names its connection.
   override protected def handleData(
     data: ByteString, responsesCount: Int
-  ): Unit = decoders.route(DecoderActor.SubscribePartition(data), self)
+  ): Unit = decoders.routees.head.send(DecoderActor.SubscribePartition(data, connectionNumber), self)
+
+  override protected def onConnectionLost(): Unit = {
+    requestOpt.foreach(_.failure(RedisIOException("Connection has been shutdown abruptly")))
+    clearPendingRequest()
+  }
 
   /** The request the next reply belongs to: the one that is partially answered, else the oldest one sent. */
   private def pendingRequest(): Option[Request[_]] = requestOpt match {
@@ -118,7 +127,10 @@ class SubscriberListenerActor(
   }
 
   override protected def always: Receive = super.always orElse {
-    case Complete(message) => {
+    case Complete(_, connection) if connection != connectionNumber => // from an earlier connection
+    case Confirm(_, connection) if connection != connectionNumber =>
+    case Fail(_, connection) if connection != connectionNumber =>
+    case Complete(message, _) => {
       requestResponsesCount += 1
       val countOpt = message match {
         case PubSubMessage.Subscribe(channel, count) => {
@@ -200,7 +212,7 @@ class SubscriberListenerActor(
         }
       }
     }
-    case Confirm(value) =>
+    case Confirm(value, _) =>
       // a status reply (e.g. +OK to AUTH, CLIENT SETNAME or QUIT): the request decodes it itself
       pendingRequest() match {
         case Some(request) =>
@@ -209,7 +221,7 @@ class SubscriberListenerActor(
           clearPendingRequest()
         case None => log.warning(s"Received '$value' without a pending request")
       }
-    case Fail(message) =>
+    case Fail(message, _) =>
       failPendingRequest(RedisErrorResponseException(message))
     case SaveSubscriptions =>
       savedSubscribedChannels ++= subscribedChannels
@@ -244,9 +256,9 @@ class SubscriberListenerActor(
 }
 
 object SubscriberListenerActor {
-  case class Complete(message: PubSubMessage)
-  case class Confirm(message: Response)
-  case class Fail(message: String)
+  case class Complete(message: PubSubMessage, connection: Int)
+  case class Confirm(message: Response, connection: Int)
+  case class Fail(message: String, connection: Int)
   case object SaveSubscriptions
   case class SendAsRegularClient(request: Request[_])
   case object RecoverPreviousSubscriberState

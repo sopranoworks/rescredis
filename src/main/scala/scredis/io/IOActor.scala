@@ -1,4 +1,6 @@
-// Modified by Sopranoworks: reports the buffer sizes it connects with.
+// Modified by Sopranoworks: reports the buffer sizes it connects with (at info level for a listener's first connection); never completes a request itself (the listener
+// fails what it sent on a connection when the connection's IOActor has stopped), a failed write closes the connection
+// instead of writing the batch again, connect failures are reported to the listener with their cause.
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -7,7 +9,6 @@ import java.nio.Buffer
 import akka.actor._
 import akka.io.{IO, Tcp}
 import akka.util.ByteString
-import scredis.exceptions.RedisIOException
 import scredis.protocol.{Protocol, Request}
 
 import scala.collection.mutable.ListBuffer
@@ -20,7 +21,8 @@ class IOActor(
   connectTimeout: FiniteDuration,
   maxWriteBatchSize: Int,
   tcpSendBufferSizeHint: Int,
-  tcpReceiveBufferSizeHint: Int
+  tcpReceiveBufferSizeHint: Int,
+  firstConnection: Boolean = true
 ) extends Actor with ActorLogging {
   
   import IOActor._
@@ -34,7 +36,6 @@ class IOActor(
     maxBufferSize = maxWriteBatchSize + (0.25 * maxWriteBatchSize).toInt
   )
   
-  private var batch: Seq[Request[_]] = Nil
   private var canWrite = false
   private var timeoutCancellableOpt: Option[Cancellable] = None
   
@@ -44,10 +45,11 @@ class IOActor(
   protected def connect(): Unit = {
     val sendBuffer = SO.SendBufferSize(tcpSendBufferSizeHint)
     val receiveBuffer = SO.ReceiveBufferSize(tcpReceiveBufferSizeHint)
-    log.info(
-      s"Connecting to $remote (tcp send buffer ${sendBuffer.size} bytes, " +
-        s"receive buffer ${receiveBuffer.size} bytes)"
-    )
+    // the first connection of a listener at info level; reconnect attempts are logged by the listener when its
+    // connection's state changes
+    val message = s"Connecting to $remote (tcp send buffer ${sendBuffer.size} bytes, " +
+      s"receive buffer ${receiveBuffer.size} bytes)"
+    if (firstConnection) log.info(message) else log.debug(message)
     IO(Tcp) ! Connect(
       remoteAddress = remote,
       options = List[akka.io.Inet.SocketOption](
@@ -62,11 +64,6 @@ class IOActor(
     timeoutCancellableOpt = Some {
       scheduler.scheduleOnce(2 seconds, self, ConnectTimeout)
     }
-  }
-  
-  protected def requeueBatch(): Unit = {
-    batch.foreach(requests.push)
-    batch = Nil
   }
   
   protected def abort(): Unit = {
@@ -101,13 +98,9 @@ class IOActor(
     connection ! Write(data, WriteAck)
     bufferPool.release(buffer)
     canWrite = false
-    this.batch = requests
   }
   
   protected def write(): Unit = {
-    if (this.batch.nonEmpty) {
-      requeueBatch()
-    }
     if (requests.isEmpty) {
       canWrite = true
       return
@@ -128,6 +121,7 @@ class IOActor(
     case Terminated(_) =>
       listenerActor ! ListenerActor.Shutdown
       become(awaitingShutdown)
+    case _: ConnectionClosed => // the listener (the connection's handler) records why it closed
   }
   
   protected def fail: Receive = {
@@ -145,22 +139,22 @@ class IOActor(
   
   def connecting: Receive = {
     case Connected(remoteConnected, localAddress) =>
-      log.info(s"Connected to $remoteConnected from $localAddress")
+      log.debug(s"Connected to $remoteConnected from $localAddress")
       connection = sender()
       connection ! Register(listenerActor)
       context.watch(connection)
-      listenerActor ! ListenerActor.Connected
+      listenerActor ! ListenerActor.Connected(connection)
       timeoutCancellableOpt.foreach(_.cancel())
       canWrite = true
-      requeueBatch()
       write()
       become(connected)
-    case CommandFailed(_: Connect) =>
-      log.error(s"Could not connect to $remote: Command failed")
+    case failed @ CommandFailed(_: Connect) =>
+      // the listener logs it (once per change of the connection's state)
+      listenerActor ! ListenerActor.ConnectFailed(failed.cause.map(_.toString).getOrElse("connect failed"))
       timeoutCancellableOpt.foreach(_.cancel())
       context.stop(self)
     case ConnectTimeout =>
-      log.error(s"Could not connect to $remote: Connect timeout")
+      listenerActor ! ListenerActor.ConnectFailed(s"connect timeout")
       context.stop(self)
   }
   
@@ -171,26 +165,34 @@ class IOActor(
         write()
       }
     case WriteAck =>
-      batch = Nil
       write()
     case CommandFailed(_: Write) =>
-      log.error(s"Write failed")
-      write()
+      // The requests of the failed write cannot be written again: their encoded buffers have been released, and
+      // which of them reached the server is unknown. The connection is closed; the listener fails what it sent on
+      // it and reconnects.
+      log.error(s"Write failed, closing the connection")
+      connection ! Abort
+      become(closingAfterFailedWrite)
   }
   
+  def closingAfterFailedWrite: Receive = {
+    case _: Request[_] =>
+    case WriteAck =>
+    case CommandFailed(_: Write) =>
+  }
+  
+  // A request that reaches this actor after its connection has gone is not written and not completed here: the
+  // listener holds every request it sent on this connection, in order, and fails them all when this actor has
+  // stopped. Completing it here as well made the listener remove a request it could not identify (the oldest).
   def awaitingShutdown: Receive = {
-    case request: Request[_] =>
-      request.failure(RedisIOException("Connection is being shutdown"))
-      listenerActor ! ListenerActor.Remove(1)
+    case _: Request[_] =>
     case WriteAck =>
     case CommandFailed(_: Write) =>
     case ShutdownAck => context.stop(self)
   }
   
   def awaitingAbort: Receive = {
-    case request: Request[_] =>
-      request.failure(RedisIOException("Connection is being reset"))
-      listenerActor ! ListenerActor.Remove(1)
+    case _: Request[_] =>
     case WriteAck =>
     case CommandFailed(_: Write) =>
     case AbortAck =>
