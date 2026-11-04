@@ -31,7 +31,13 @@ rescredis 1.0.0 = scredis 2.4.3 (upstream tag `v2.4.3`, commit `2e1928d7a961856d
 * The Apache Pekko artifact.
 * JSON commands for Redis Stack (the code of scredis-json 1.0.1, see "JSON").
 
-Upstream features added after 2.4.3 (`SMISMEMBER`, stream commands) are not included.
+Upstream features added after 2.4.3 (`SMISMEMBER`, stream commands) are not included; rescredis adds its own
+stream commands in 1.1.0.
+
+Changes:
+
+* 1.1.0 (in development, `1.1.0-SNAPSHOT`): stream commands `XADD`, `XLEN`, `XRANGE`, `XREVRANGE`, `XDEL`,
+  `XTRIM`, `XREAD` and `XREAD ... BLOCK` (see "Streams"); consumer groups are not included yet.
 
 ## Features
 * Supports all Redis commands up to v3.0.0
@@ -45,6 +51,7 @@ Upstream features added after 2.4.3 (`SMISMEMBER`, stream commands) are not incl
   * Automatically resubscribes to previously subscribed channels/patterns upon reconnection
 * Cluster support via `RedisCluster`
 * JSON commands (Redis Stack / RedisJSON) on `Client`, `Redis` and `RedisCluster`: `client.Json.set(...)`
+* Stream commands (`XADD`, `XRANGE`, `XREAD`, ...; `XREAD ... BLOCK` on the blocking client)
 * Customizable serialization and deserialization of command inputs and outputs
 * Fully configurable
   * Akka or Pekko dispatchers
@@ -145,7 +152,7 @@ redis.quit()
 `RedisCluster` sends a command to the node that holds the slot of its key, follows `MOVED` / `ASK` redirections
 and retries `TRYAGAIN` / `CLUSTERDOWN`. A command with several keys (`MGET`, `MSET`, `MSETNX`, `DEL`,
 `RENAME`, `SUNION`, `SINTERSTORE`, `ZUNIONSTORE`, `BITOP`, `PFCOUNT`, `PFMERGE`, `RPOPLPUSH`, `SMOVE`,
-`SORT ... STORE`, `EVAL` with several keys, `Json.mGet`, `Json.mSet`, ...) is routed by its first key, and Redis
+`SORT ... STORE`, `EVAL` with several keys, `XREAD` with several streams, `Json.mGet`, `Json.mSet`, ...) is routed by its first key, and Redis
 Cluster executes it only if **all its keys hash to one slot**. Put a hash tag in the keys so that they do:
 `{user:1}:name` and `{user:1}:email` are in the same slot, because only the part between the braces is hashed.
 
@@ -162,6 +169,44 @@ val cluster = RedisCluster(Server("localhost", 7000))
 cluster.mSet(Map("{user:1}:name" -> "Ann", "{user:1}:email" -> "ann@example.org"))   // one slot: works
 cluster.mSet(Map("user:1:name" -> "Ann", "user:2:name" -> "Bob"))                      // CROSSSLOT
 ```
+
+## Streams
+
+The stream commands are part of `Client`, `Redis`, `RedisCluster` and transactions; they send the command as
+Redis defines it and return what Redis answers (errors included):
+
+| Method | Redis command |
+|---|---|
+| `xAdd(key, fields, id = "*", noMkStream = false, trim = None)` | `XADD key [NOMKSTREAM] [MAXLEN\|MINID [=\|~] threshold [LIMIT count]] *\|id field value ...` |
+| `xLen(key)` | `XLEN key` |
+| `xRange[R](key, start = "-", end = "+", count = None)` | `XRANGE key start end [COUNT count]` |
+| `xRevRange[R](key, end = "+", start = "-", count = None)` | `XREVRANGE key end start [COUNT count]` |
+| `xDel(key, ids*)` | `XDEL key id ...` |
+| `xTrim(key, trim)` | `XTRIM key MAXLEN\|MINID [=\|~] threshold [LIMIT count]` |
+| `xRead[R](streams, count = None)` | `XREAD [COUNT count] STREAMS key ... id ...` |
+| `blocking.xRead[R](blockMillis, streams, count = None)` | `XREAD [COUNT count] BLOCK milliseconds STREAMS key ... id ...` |
+
+Entry ids are `String`s, in any form Redis accepts (`*`, `<ms>-*`, `<ms>-<seq>`, `-`, `+`, `(<id>`, `$`, ...), and
+come back as Redis writes them. An entry is a `StreamEntry[R](id, fields)` with its field-value pairs in Redis'
+order; field values use the `Writer` / `Reader` of the other commands, so bytes round-trip. A trimming is
+`StreamTrim.MaxLen(threshold, operator, limit)` or `StreamTrim.MinId(threshold, operator, limit)`, with the
+operator `StreamTrimOperator.Exact` (`=`) or `Approximate` (`~`). Nil replies are `None`: `xAdd` with
+`noMkStream = true` on a missing key, and `xRead` when no stream has entries (or the block time is over).
+
+`XREAD` with `BLOCK` is a blocking command and is sent the way `BLPOP` is: on the connection of a
+`BlockingClient` (`redis.blocking`), whose call returns a `Try` once Redis answers. The caller waits 2 s longer
+than the block time; `BLOCK 0` waits without limit. `RedisCluster` has no blocking client.
+
+```scala
+val redis = Redis()
+redis.xAdd("events", Seq("room" -> "42", "op" -> "join"), trim = Some(StreamTrim.MaxLen(10000, Some(StreamTrimOperator.Approximate))))
+redis.xRead[String](Seq("events" -> "0"))                // Future[Option[List[(String, List[StreamEntry[String]])]]]
+redis.blocking.xRead[String](5000, Seq("events" -> "$"))  // Try[...]: blocks up to 5 s for a new entry
+```
+
+On `RedisCluster`, a stream command goes to the node of its key; an `XREAD` of streams in several slots is sent as
+it is and Redis answers `CROSSSLOT`. Consumer groups (`XGROUP`, `XREADGROUP`, `XACK`, `XPENDING`, `XCLAIM`,
+`XAUTOCLAIM`, `XINFO`) are not implemented yet.
 
 ## JSON
 

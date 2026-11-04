@@ -1,3 +1,4 @@
+// Modified by Sopranoworks: StreamCommands mixed in.
 package scredis
 
 import scredis.io.{ Connection, NonBlockingConnection }
@@ -21,6 +22,7 @@ final class TransactionBuilder private[scredis] ()(
   with ServerCommands
   with SetCommands
   with SortedSetCommands
+  with StreamCommands
   with StringCommands {
   
   private val requests = ListBuffer[Request[_]]()

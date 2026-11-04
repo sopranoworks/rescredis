@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: JsonCommands mixed in.
+// Modified by Sopranoworks: JsonCommands mixed in; StreamCommands mixed in.
 package scredis
 
 import akka.actor.ActorSystem
@@ -71,6 +71,7 @@ class Client(
   with ListCommands
   with SetCommands
   with SortedSetCommands
+  with StreamCommands
   with ScriptingCommands
   with HyperLogLogCommands
   with PubSubCommands

@@ -10,7 +10,7 @@ ThisBuild / organizationHomepage := Some(url("https://sopranoworks.com"))
 
 // rescredis 1.0.0 is scredis 2.4.3 with the fixes listed in README.md. Fixes are patch releases,
 // features are minor releases. The Akka and the Pekko artifact always have the same version.
-ThisBuild / version := "1.0.0"
+ThisBuild / version := "1.1.0-SNAPSHOT"
 
 ThisBuild / scalaVersion := "3.3.8"
 ThisBuild / crossScalaVersions := Seq("2.12.21", "2.13.18", "3.3.8")

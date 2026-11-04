@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials; BlockingStreamCommands mixed in.
 package scredis
 
 import akka.actor.ActorSystem
@@ -62,7 +62,7 @@ class BlockingClient(
   akkaIODispatcherPath = akkaIODispatcherPath,
   akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
   failCommandOnConnecting = failCommandOnConnecting
-) with BlockingListCommands {
+) with BlockingListCommands with BlockingStreamCommands {
   
   /**
    * Constructs a $client instance from a [[scredis.RedisConfig]]

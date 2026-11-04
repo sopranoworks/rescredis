@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant; tcp receive buffer hint, failCommandOnConnecting of the blocking client, credentials (clearCredentials).
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant; tcp receive buffer hint, failCommandOnConnecting of the blocking client, credentials (clearCredentials); StreamCommands mixed in.
 package scredis
 
 import akka.actor._
@@ -64,6 +64,7 @@ class Redis private[scredis] (
   with ListCommands
   with SetCommands
   with SortedSetCommands
+  with StreamCommands
   with ScriptingCommands
   with HyperLogLogCommands
   with PubSubCommands

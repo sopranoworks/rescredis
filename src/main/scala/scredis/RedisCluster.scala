@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: JsonCommands mixed in; tcp buffer hints and decoder dispatcher path passed on.
+// Modified by Sopranoworks: JsonCommands mixed in; tcp buffer hints and decoder dispatcher path passed on; StreamCommands mixed in.
 package scredis
 
 import akka.actor.ActorSystem
@@ -61,6 +61,7 @@ class RedisCluster private[scredis](
   with ScriptingCommands
   with SetCommands
   with SortedSetCommands
+  with StreamCommands
   with StringCommands
   with JsonCommands
   //with SubscriberCommands

@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: Scala 3 compatibility; Redis 7 ROLE replication states.
+// Modified by Sopranoworks: Scala 3 compatibility; Redis 7 ROLE replication states; stream types.
 
 import scala.language.implicitConversions
 import scala.concurrent.duration.FiniteDuration
@@ -452,5 +452,56 @@ package object scredis {
    * @param port port of the server
    */
   case class Server(host: String, port: Int)
+
+  /**
+   * An entry of a Redis stream, as XRANGE, XREVRANGE and XREAD return it.
+   *
+   * @param id the entry id, as Redis wrote it (`<milliseconds>-<sequence>`)
+   * @param fields the field-value pairs of the entry, in the order Redis returns them
+   */
+  final case class StreamEntry[R](id: String, fields: List[(String, R)])
+
+  /**
+   * The comparison operator of a stream trimming: `=` (exact) or `~` (approximate, nearly exact)
+   */
+  sealed abstract class StreamTrimOperator(val name: String) {
+    override def toString = name
+  }
+
+  object StreamTrimOperator {
+    /** `=`: trims exactly to the threshold */
+    case object Exact extends StreamTrimOperator("=")
+    /** `~`: Redis trims only whole macro nodes, so the stream may keep somewhat more entries */
+    case object Approximate extends StreamTrimOperator("~")
+  }
+
+  /**
+   * The trimming of XADD and XTRIM: `MAXLEN|MINID [=|~] threshold [LIMIT count]`. What is given is sent as
+   * given; Redis checks the combination (e.g. `LIMIT` needs `~`).
+   */
+  sealed abstract class StreamTrim(val strategy: String) {
+    def thresholdValue: String
+    def operator: Option[StreamTrimOperator]
+    def limit: Option[Long]
+
+    private[scredis] def args: List[Any] =
+      List(strategy) ++ operator.map(_.name) ++ List(thresholdValue) ++ limit.toList.flatMap(l => List("LIMIT", l))
+  }
+
+  object StreamTrim {
+    /** `MAXLEN [=|~] threshold [LIMIT count]`: keeps at most `threshold` entries */
+    final case class MaxLen(
+      threshold: Long, operator: Option[StreamTrimOperator] = None, limit: Option[Long] = None
+    ) extends StreamTrim("MAXLEN") {
+      override def thresholdValue: String = threshold.toString
+    }
+
+    /** `MINID [=|~] threshold [LIMIT count]`: removes the entries with an id lower than `threshold` (since 6.2.0) */
+    final case class MinId(
+      threshold: String, operator: Option[StreamTrimOperator] = None, limit: Option[Long] = None
+    ) extends StreamTrim("MINID") {
+      override def thresholdValue: String = threshold
+    }
+  }
 
 }

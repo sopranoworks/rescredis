@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: RedisJson tag added.
+// Modified by Sopranoworks: RedisJson tag added; tags of the stream commands (5.0.0 - 7.4.0).
 package scredis.tags
 
 import org.scalatest.Tag
@@ -21,5 +21,9 @@ object V2812 extends Tag("V2812")
 object V2813 extends Tag("V2813")
 object V2950 extends Tag("V2950")
 object V300 extends Tag("V300")
+object V500 extends Tag("V500")
+object V620 extends Tag("V620")
+object V700 extends Tag("V700")
+object V740 extends Tag("V740")
 // needs the Redis Stack JSON module (RedisJSON 2.6 or later)
 object RedisJson extends Tag("RedisJson")
