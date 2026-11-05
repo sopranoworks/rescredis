@@ -4,11 +4,14 @@
 // the connection's health (state, availability), a PING to learn that Redis answers on a new connection without initialisation requests, an
 // idle PING; requests that fail because of the connection fail as not sent or as outcome unknown; ConnectNow (the next attempt at once);
 // DeadlinePassed (a blocking call whose deadline passed: its request taken out of the queue and failed as not sent when it was not written,
-// else the connection replaced).
+// else the connection replaced); the end of a connection is handled once the replies received on it have reached their requests
+// (whenDecoded); QUIT completes when its connection has ended, and closes the client when it waited for a connection that could not be made;
+// the queue timeout (a request that waited unwritten longer is taken out and fails as not sent).
 package scredis.io
 
 import java.net.InetSocketAddress
 import java.util
+import java.util.concurrent.TimeoutException
 
 import akka.actor._
 import akka.io.Tcp
@@ -18,6 +21,7 @@ import scredis.{Availability, ConnectionHealth, RedisConfigDefaults, Subscriptio
 import scredis.exceptions.{RedisIOException, RedisNotSentException, RedisOutcomeUnknownException}
 import scredis.protocol.requests.ConnectionRequests.{Auth, Ping, Quit, Select}
 import scredis.protocol.requests.ServerRequests
+import scredis.protocol.requests.TransactionRequests.Exec
 import scredis.protocol.{AuthConfig, Protocol, Request}
 import scredis.util.UniqueNameGenerator
 
@@ -57,7 +61,7 @@ class ListenerActor(
   private var remainingByteStringOpt: Option[ByteString] = None
   private var initializationRequestsCount = 0
   private var isConnecting = false
-  private var isShuttingDown = false
+  protected var isShuttingDown = false
   private var isShuttingDownBeforeConnected = false
   // why the current connection is being closed by this actor (a receive timeout, an unanswered PING)
   private var closingCause: Option[String] = None
@@ -99,6 +103,12 @@ class ListenerActor(
   private var lastActivity = System.nanoTime()
   private val idlePingIntervalOpt = RedisConfigDefaults.IO.Health.IdlePingIntervalOpt
   private val idlePingTimeout = RedisConfigDefaults.IO.Health.IdlePingTimeout
+
+  // How long a request may wait unwritten (scredis.io.queue-timeout, else the receive timeout), and the check of the
+  // requests that did, every tenth of it
+  private val queueTimeoutOpt: Option[FiniteDuration] =
+    RedisConfigDefaults.IO.QueueTimeoutSetting.getOrElse(receiveTimeoutOpt)
+  private var queueTickOpt: Option[Cancellable] = None
 
   /** A request that fails before it was sent: certainly not executed */
   protected def notSent(message: String, cause: Throwable = null): RedisNotSentException =
@@ -282,6 +292,47 @@ class ListenerActor(
   protected def onConnectionLost(): Unit = ()
 
   /**
+   * Runs `end`, the handling of the end of the current connection (its IOActor has stopped), once every reply
+   * received on it has reached its request. Here at once: the requests whose replies have been received were taken
+   * out of `requests` with their data, and the decoders complete them whenever they decode it; `end` fails only those
+   * left. A subscriber completes its requests from the decoder's results, and waits for them.
+   */
+  protected def whenDecoded(end: => Unit): Unit = end
+
+  /**
+   * A QUIT waits in the queue for a connection that could not be made or initialised, or that has ended: the client
+   * is closed without writing it, and it completes. True when there was one.
+   */
+  private def closedByQueuedQuit(): Boolean = {
+    val it = queuedRequests.iterator()
+    var quitOpt: Option[Request[_]] = None
+    while (quitOpt.isEmpty && it.hasNext) it.next() match {
+      case quit: Quit =>
+        it.remove()
+        quitOpt = Some(quit)
+      case _ =>
+    }
+    quitOpt.foreach { quit =>
+      // closed before QUIT completes: whoever waits for it finds the client closed
+      health.closed()
+      quit.success(())
+      failAllQueuedRequests(closing("Connection has been shutdown by QUIT command"))
+      failAllSentRequests(outcomeUnknown("Connection has been shutdown"))
+      shutdown()
+    }
+    quitOpt.isDefined
+  }
+
+  /**
+   * The connection QUIT was written on has ended: the caller asked to close it, so QUIT completes, with its reply or
+   * without it. What was sent before it and not answered will not be.
+   */
+  private def endedAfterQuit(): Unit = while (!requests.isEmpty) requests.pop() match {
+    case quit: Quit => quit.success(())
+    case request => request.failure(outcomeUnknown("Connection has been shutdown"))
+  }
+
+  /**
    * The connection of the current IOActor has ended (the actor has stopped): every request sent on it is failed,
    * and a new connection is made, at once if Redis had answered on this one, else after the backoff.
    */
@@ -368,6 +419,17 @@ class ListenerActor(
         log.debug(s"The deadline of the blocking call $request passed before it was written; not sent")
         request.failure(notSent(s"Not sent within its deadline: $request", cause))
       }
+    case IOActor.Expired(expired) =>
+      // taken out of the queue of the current connection's IOActor: not written, and never will be
+      if (isIOActor(sender())) {
+        removeFromEnd(requests, expired)
+        expired.foreach(failQueueTimedOut)
+      }
+    case QueueTick => queueTimeoutOpt.foreach { queueTimeout =>
+      val cutoff = System.nanoTime() - queueTimeout.toNanos
+      takeExpired(queuedRequests, cutoff).foreach(failQueueTimedOut)
+      if (waitedLonger(requests, cutoff)) ioActor ! IOActor.Expire(cutoff)
+    }
     case ReconnectNow(_) =>
     case ConnectNow =>
     case DeadlinePassed(_, _) =>
@@ -384,8 +446,11 @@ class ListenerActor(
   }
   
   protected def queue: Receive = {
-    case request: Request[_] => queuedRequests.addLast(request)
+    case request: Request[_] =>
+      waiting(request)
+      queuedRequests.addLast(request)
     case t @ Transaction(requests) =>
+      waiting(t.execRequest)
       queuedRequests.addLast(MultiRequest)
       requests.foreach { request =>
         queuedRequests.addLast(request)
@@ -395,8 +460,10 @@ class ListenerActor(
   
   protected def sendReceive: Receive = {
     case request: Request[_] =>
+      waiting(request)
       send(request)
     case t @ Transaction(requests) =>
+      waiting(t.execRequest)
       send(MultiRequest)
       send(requests: _*)
       send(t.execRequest)
@@ -475,11 +542,27 @@ class ListenerActor(
   /** Removes `request` itself from the requests sent on the current connection (only when it was not written) */
   private def removeSent(request: Request[_]): Boolean = removeIdentical(requests, request)
 
+  /** `request` has been received from a caller: it may wait unwritten for the queue timeout from now */
+  private def waiting(request: Request[_]): Unit = if (queueTimeoutOpt.isDefined) request match {
+    case Quit() | ServerRequests.Shutdown(_) =>
+    case _ => if (request.waitingSince == Request.NotWaiting) request.waitingSince = System.nanoTime()
+  }
+
+  /** `request` waited unwritten longer than the queue timeout and was taken out: not sent */
+  private def failQueueTimedOut(request: Request[_]): Unit = if (!(request eq MultiRequest)) {
+    val queueTimeout = queueTimeoutOpt.getOrElse(Duration.Zero)
+    log.debug(s"$request waited unwritten longer than the queue timeout ($queueTimeout); not sent")
+    request.failure(notSent(
+      s"Not sent within the queue timeout ($queueTimeout): $request",
+      new TimeoutException(s"Waited unwritten longer than $queueTimeout")
+    ))
+  }
+
   /**
    * The deadline of a blocking call passed while its request waits in this actor's queue (connecting, initializing,
    * reconnecting): it is taken out, so it is never written, and fails as not sent.
    */
-  private def queuedDeadlines: Receive = {
+  protected def queuedDeadlines: Receive = {
     case DeadlinePassed(request, cause) if removeIdentical(queuedRequests, request) =>
       log.debug(s"The deadline of the blocking call $request passed while it was queued; not sent")
       request.failure(notSent(s"Not sent within its deadline: $request", cause))
@@ -524,6 +607,10 @@ class ListenerActor(
   }
   
   override def preStart(): Unit = {
+    queueTickOpt = queueTimeoutOpt.map { queueTimeout =>
+      val interval = (queueTimeout / 10).max(10.millis)
+      context.system.scheduler.scheduleWithFixedDelay(interval, interval, self, QueueTick)
+    }
     ioActor = createIOActor()
     decoders = createDecodersRouter()
     context.watch(ioActor)
@@ -538,12 +625,13 @@ class ListenerActor(
   // once (a RedisCluster then sends them to another node), as do all with failCommandOnConnecting.
   def connecting: Receive = queuedDeadlines orElse {
     case request: Quit =>
-      request.success(())
       health.closed()
+      request.success(())
       failAllQueuedRequests(closing("Connection has been shutdown by QUIT command"))
       isShuttingDownBeforeConnected = true
       shutdown()
     case request: Request[_] =>
+      waiting(request)
       if(failCommandOnConnecting) {
         request.failure(notSent("Trying to connect..."))
       } else if (!isConnecting) {
@@ -552,6 +640,7 @@ class ListenerActor(
         queuedRequests.addLast(request)
       }
     case t @ Transaction(requests) =>
+      waiting(t.execRequest)
       if (!isConnecting && !failCommandOnConnecting) {
         t.execRequest.failure(notSent(s"No connection to $remote ($lastFailure); reconnecting"))
       } else {
@@ -638,8 +727,10 @@ class ListenerActor(
       isConnecting = false
       // the health first: the queued requests carry the availability of this outage
       health.reconnecting(healthAttempt, lastCause, waiting = false)
-      failAllQueuedRequests(notSent(s"Could not connect to $remote ($lastCause)"))
-      connectionEnded(s"Could not connect to $remote")
+      if (!closedByQueuedQuit()) {
+        failAllQueuedRequests(notSent(s"Could not connect to $remote ($lastCause)"))
+        connectionEnded(s"Could not connect to $remote")
+      }
   }
   
   def initializing: Receive = queue orElse deadlines orElse {
@@ -658,39 +749,52 @@ class ListenerActor(
         }
       }
     case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
-    case Terminated(ref) if isIOActor(ref) =>
+    case Terminated(ref) if isIOActor(ref) => whenDecoded {
       health.reconnecting(healthAttempt, lastCause, waiting = false)
-      failAllQueuedRequests(notSent(s"Could not initialize connection to $remote"))
-      connectionEnded(s"Could not initialize connection to $remote")
+      if (!closedByQueuedQuit()) {
+        failAllQueuedRequests(notSent(s"Could not initialize connection to $remote"))
+        connectionEnded(s"Could not initialize connection to $remote")
+      }
+    }
   }
   
   def initialized: Receive = sendReceive orElse healthChecks orElse deadlines orElse {
     case Tcp.Received(data) if isCurrent(sender()) => receiveData(data)
     case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
     case Terminated(ref) if isIOActor(ref) =>
-      connectionEnded("Connection has been shutdown abruptly")
+      whenDecoded(connectionEnded("Connection has been shutdown abruptly"))
   }
   
   def reconnecting: Receive = queue orElse queuedDeadlines orElse {
-    case Terminated(ref) if isIOActor(ref) =>
-      closingCause match {
+    case Terminated(ref) if isIOActor(ref) => whenDecoded {
+      if (!closedByQueuedQuit()) closingCause match {
         case Some("receive timeout") => connectionEnded("Receive timeout")
         case Some(cause) => connectionEnded(s"Connection closed: $cause")
         case None => connectionEnded("Connection has been shutdown abruptly")
       }
+    }
   }
   
   def shuttingDown: Receive = fail orElse {
     case Tcp.Received(data) if isCurrent(sender()) => receiveData(data)
-    case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
+    case ReceiveTimedOut(number) if number == connectionNumber =>
+      // QUIT is not answered: the connection is closed, and the client with it (no new connection)
+      log.error("Receive timeout")
+      closingCause = Some("receive timeout")
+      cancelReceiveTimeout()
+      ioActor ! IOActor.Shutdown
+    case Abort if isIOActor(sender()) => ioActor ! IOActor.AbortAck
     case Shutdown if isIOActor(sender()) => ioActor ! IOActor.ShutdownAck
-    case Terminated(ref) if isIOActor(ref) =>
-      // what was sent and not answered before the connection closed will not be answered
-      failAllSentRequests(outcomeUnknown("Connection has been shutdown"))
+    case Terminated(ref) if isIOActor(ref) => whenDecoded {
+      endedAfterQuit()
       shutdown()
+    }
   }
   
-  override def postStop(): Unit = health.closed()
+  override def postStop(): Unit = {
+    queueTickOpt.foreach(_.cancel())
+    health.closed()
+  }
 
   def awaitingDecodersShutdown: Receive = fail orElse {
     case Terminated(ref) if !isIOActor(ref) =>
@@ -715,6 +819,7 @@ object ListenerActor {
   private case class IdleTick(connectionNumber: Int)
   private case class PingTimedOut(connectionNumber: Int, ping: Int)
   private case class ProbeAnswered(connectionNumber: Int)
+  private case object QueueTick
   /** The server accepted an `AUTH` with these credentials. */
   case class CredentialsAccepted(credentials: AuthConfig)
   /** Do not send `AUTH` on later reconnects. */
@@ -733,6 +838,65 @@ object ListenerActor {
    * the request and the connection as before 1.1.0).
    */
   private[scredis] final case class DeadlinePassed(request: Request[_], cause: Throwable)
+
+  /**
+   * Takes out of `list` (requests not written yet, in order) those that have waited since before `cutoff`, and
+   * returns them in order. A transaction (MULTI, its requests, EXEC: only EXEC waits) is taken out whole, and only
+   * when all of it is in `list`: one whose MULTI has been written stays.
+   */
+  private[io] def takeExpired(list: util.LinkedList[Request[_]], cutoff: Long): List[Request[_]] = {
+    if (!waitedLonger(list, cutoff)) Nil else {
+      val kept = new util.LinkedList[Request[_]]()
+      val taken = ListBuffer[Request[_]]()
+      val it = list.iterator()
+      while (it.hasNext) {
+        val request = it.next()
+        if (!expired(request, cutoff)) kept.addLast(request)
+        else request match {
+          case _: Exec =>
+            // back to its MULTI: the transaction is in `list` from there
+            val transaction = ListBuffer[Request[_]](request)
+            while (!kept.isEmpty && !(kept.getLast eq Transaction.MultiRequest)) transaction.prepend(kept.removeLast())
+            if (kept.isEmpty) {
+              transaction.remove(transaction.size - 1)
+              transaction.foreach(kept.addLast)
+              kept.addLast(request)
+            } else {
+              transaction.prepend(kept.removeLast())
+              taken ++= transaction
+            }
+          case _ => taken += request
+        }
+      }
+      list.clear()
+      list.addAll(kept)
+      taken.toList
+    }
+  }
+
+  private def expired(request: Request[_], cutoff: Long): Boolean =
+    request.waitingSince != Request.NotWaiting && request.waitingSince - cutoff < 0
+
+  /** True when a request in `list` has waited since before `cutoff` */
+  private[io] def waitedLonger(list: util.LinkedList[Request[_]], cutoff: Long): Boolean = {
+    val it = list.iterator()
+    var found = false
+    while (!found && it.hasNext) found = expired(it.next(), cutoff)
+    found
+  }
+
+  /**
+   * Removes `items` (in the order they are in `list`, at its end: requests not written yet) from `list`, from its
+   * end: MULTI, which is the same request in every transaction, is removed where it belongs to the items' transaction.
+   */
+  private[io] def removeFromEnd(list: util.LinkedList[Request[_]], items: List[Request[_]]): Unit = {
+    val it = list.descendingIterator()
+    var rest = items.reverse
+    while (rest.nonEmpty && it.hasNext) if (it.next() eq rest.head) {
+      it.remove()
+      rest = rest.tail
+    }
+  }
 
   /** Removes `request` itself from `list`; true when it was there */
   private[io] def removeIdentical(list: util.LinkedList[Request[_]], request: Request[_]): Boolean = {

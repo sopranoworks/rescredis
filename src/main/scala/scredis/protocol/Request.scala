@@ -1,5 +1,5 @@
 // Modified by Sopranoworks: copyForResend (a request object is sent on one connection only); a permit of max-concurrent-requests is
-// released exactly once, by the request that holds it.
+// released exactly once, by the request that holds it; since when it waits unwritten (the queue timeout).
 package scredis.protocol
 
 import java.nio.ByteBuffer
@@ -27,6 +27,10 @@ abstract class Request[A](command: Command, args: Any*) {
   // when the request is completed. Requests that the library sends itself (AUTH / SELECT / CLIENT SETNAME on connect,
   // the idle PING, the MULTI of a transaction, a subscriber's requests) and the copies made for a resend hold none.
   private val permit = new AtomicBoolean(false)
+  // When a connection's listener received it (System.nanoTime): it may wait unwritten for the queue timeout from then.
+  // Request.NotWaiting for the requests that wait as long as needed: those the library sends itself, the requests
+  // inside a transaction (their EXEC waits for the transaction), QUIT, and every request when there is no queue timeout.
+  @volatile private[scredis] var waitingSince: Long = Request.NotWaiting
   def future: Future[A] = promise.future
   val repliesCount = 1
 
@@ -116,4 +120,9 @@ abstract class Request[A](command: Command, args: Any*) {
     case x                  => x.toString
   }.mkString(" ")
   
+}
+
+private[scredis] object Request {
+  /** `waitingSince` of a request that is not subject to the queue timeout */
+  val NotWaiting: Long = Long.MinValue
 }

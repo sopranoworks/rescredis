@@ -1,5 +1,5 @@
 // Modified by Sopranoworks: a reply on the subscriber connection that cannot be decoded fails the pending request; the
-// results of a subscriber partition name the connection the data came from.
+// results of a subscriber partition name the connection the data came from; Drain (answered after the partitions sent before it).
 package scredis.io
 
 import akka.actor.{Actor, ActorLogging}
@@ -88,6 +88,9 @@ class DecoderActor(subscriptionOption: Option[Subscription]) extends Actor with 
             sender() ! SubscriberListenerActor.Fail(s"Could not decode reply: $msg", connection)
         }
       }
+    case Drain(number) =>
+      // after every partition sent before it, so after the results of the data that came with them
+      sender() ! Drained(number)
     case x => log.error(s"Received unexpected message: $x")
   }
   
@@ -97,4 +100,7 @@ object DecoderActor {
   case class Partition(data: ByteString, requests: Iterator[Request[_]], skip: Int)
   /** Data of the subscriber connection number `connection` */
   case class SubscribePartition(data: ByteString, connection: Int)
+  /** Answered with `Drained(number)` once the partitions sent before it have been decoded */
+  case class Drain(number: Int)
+  case class Drained(number: Int)
 }

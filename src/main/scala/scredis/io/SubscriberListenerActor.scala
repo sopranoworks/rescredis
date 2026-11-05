@@ -1,6 +1,7 @@
 // Modified by Sopranoworks: every reply completes the pending request (status replies, errors, unmatched replies); QUIT fails what is outstanding;
 // the data of a connection is decoded in order by one decoder, results from an earlier connection are ignored, a partly answered request
-// fails when its connection is lost; the connection's health; requests fail as not sent or as outcome unknown.
+// fails when its connection is lost; the connection's health; requests fail as not sent or as outcome unknown; the end of a connection waits
+// for the decoder's results of the data received on it; quit() goes through the state of the connection (no connection: closed at once).
 package scredis.io
 
 import akka.util.ByteString
@@ -63,6 +64,9 @@ class SubscriberListenerActor(
   private var subscribedCount = 0
   private var subscribedChannelsCount = 0
   private var subscribedPatternsCount = 0
+  // the end of the current connection, waiting for the decoder's answer to Drain(drains)
+  private var drains = 0
+  private var pendingEnd: () => Unit = () => ()
 
   override protected val decodingSubscription: Option[Subscription] = Some(subscription)
   
@@ -112,6 +116,24 @@ class SubscriberListenerActor(
   }
 
   override protected def isIdle: Boolean = super.isIdle && requestOpt.isEmpty
+
+  // The results of the data received on the connection come from its one decoder, before its answer to Drain: the end
+  // is handled once they have completed their requests.
+  override protected def whenDecoded(end: => Unit): Unit = {
+    drains += 1
+    pendingEnd = () => end
+    decoders.routees.head.send(DecoderActor.Drain(drains), self)
+    become(draining)
+  }
+
+  private def draining: Receive = queuedDeadlines orElse {
+    case DecoderActor.Drained(number) if number == drains =>
+      val end = pendingEnd
+      pendingEnd = () => ()
+      end()
+    case request: Request[_] if !isShuttingDown => queue(request)
+    case request: Request[_] => fail(request)
+  }
 
   /** The request the next reply belongs to: the one that is partially answered, else the oldest one sent. */
   private def pendingRequest(): Option[Request[_]] = requestOpt match {
@@ -255,7 +277,8 @@ class SubscriberListenerActor(
       failAllSentRequests(closed)
       failAllQueuedRequests(notSent("Connection has been closed"))
       onConnect()
-      send(quit)
+      // as any QUIT, in the state of the connection: written when it is up, else the client is closed without it
+      self ! quit
   }
   
 }

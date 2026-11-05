@@ -1,4 +1,5 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials; quit() completes once the
+// subscriber is closed.
 package scredis
 
 import akka.actor.ActorSystem
@@ -151,6 +152,9 @@ class SubscriberClient(
   
   /**
    * Unsubscribes from all subscribed channels/patterns and then closes the connection.
+   *
+   * Completes successfully once the subscriber is closed, as `Client.quit()`: also when the connection ends before
+   * QUIT's reply, and without writing QUIT when there is no connection.
    */
   def quit(): Future[Unit] = shutdown()
   

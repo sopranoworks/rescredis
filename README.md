@@ -51,7 +51,10 @@ Changes:
   `blockingClient` / `withBlocking` on `Redis` and `RedisCluster`, with the same error classes and policy (a
   blocking call whose deadline passes fails with `RedisOutcomeUnknownException`); **`Redis.blocking` is
   deprecated** and keeps the errors it had in 1.0.0 (see "Connections", "Blocking client"). Retry helpers:
-  `withRetry` on `Client`, `Redis`, `RedisCluster` and the blocking clients, and `RetryPolicy`.
+  `withRetry` on `Client`, `Redis`, `RedisCluster` and the blocking clients, and `RetryPolicy`. A queue timeout
+  (`scredis.io.queue-timeout`): a request that waits unwritten longer fails as not sent and is never written later.
+  `quit()` completes once the client is closed, also when the connection ends before `+OK` or there is none. Fix: on
+  a subscriber client, a reply received just before its connection ended could fail its request as outcome unknown.
 
 ## Features
 * Supports all Redis commands up to v3.0.0
@@ -141,6 +144,20 @@ cause) and its return once (info, with the number of attempts and the time); sin
 level, without stack traces. The receive timeout (`scredis.io.receive-timeout`) covers every request waiting for
 its reply. A `RedisCluster` keeps a node's connection after errors; it reconnects with the backoff.
 
+**Queue timeout.** A request may wait unwritten (in the client's queue while its connection is being made or
+initialised, or behind earlier writes the connection has not taken yet) for at most `scredis.io.queue-timeout`.
+Past it the request is taken out and fails with a `RedisNotSentException` (its cause a `TimeoutException`); it is
+never written later. A request that was written is in flight, and the receive timeout covers it. A transaction is
+taken out whole, and only when none of it has been written. `QUIT` is not subject to it. When `queue-timeout` is not
+set it is each client's receive timeout (none on the blocking clients, which have no receive timeout: there the
+deadline of the call applies); `0` waits as long as needed (as before 1.1.0). It is checked every tenth of its
+value (at least every 10 ms). Read from the application's configuration for every client (as `reconnect`). On
+`RedisCluster` such a request is sent again as any request that was not sent.
+
+```
+scredis.io.queue-timeout = 5 seconds   # not set by default: the receive timeout; 0 = no limit
+```
+
 **WAIT.** `wait(numReplicas, timeout)` on `Client`, `Redis` and transactions sends `WAIT numreplicas timeout`
 (timeout in milliseconds, 0 = no limit) and returns what Redis answers (the number of replicas that acknowledged
 the writes). Redis applies it to the connection it is sent on: the writes sent before it on the same connection.
@@ -175,6 +192,13 @@ reference to it once it is completed. When the client is closed (`quit()`), `whe
 `RedisIOException`. On `RedisCluster`, `cluster.availability(key)` is that of the master of the key's slot and
 `cluster.availability` that of the whole cluster (see "Cluster").
 
+**Closing.** `quit()` completes successfully once the client is closed: when `QUIT` has been written and its
+connection has ended, with its `+OK` or without it (closed or reset by the server, or closed by the client after
+the receive timeout), and without writing it when there is no connection (none can be made, or the one it waited
+for could not be initialised or ended). The client then makes no new connection; its state is `Closed`, and later
+requests fail as not sent. Requests written before `QUIT` and not answered fail as outcome unknown, those still
+waiting as not sent. The same holds for `SubscriberClient.quit()`.
+
 **Errors.** A request that fails because of its connection fails with one of two `RedisIOException`s, which say
 whether Redis may have executed it; both carry the `availability` of the connection (on `RedisCluster`, of the
 key's slot). What Redis answers with an error keeps its own types (`RedisErrorResponseException`,
@@ -182,7 +206,7 @@ key's slot). What Redis answers with an error keeps its own types (`RedisErrorRe
 
 | Class | When | Executed? |
 |---|---|---|
-| `RedisNotSentException` | no connection (an attempt failed, or the client waits for its next attempt); addressed to a node or a slot's master known to be down; `fail-command-on-connecting` while connecting; after `QUIT`; on `RedisCluster`, `CLUSTERDOWN` / `TRYAGAIN` after the retries; a blocking call made while another one blocks; a blocking call's deadline passed before the write (taken out of the queue, never written) | certainly not: safe to send again |
+| `RedisNotSentException` | no connection (an attempt failed, or the client waits for its next attempt); addressed to a node or a slot's master known to be down; `fail-command-on-connecting` while connecting; after `QUIT`; on `RedisCluster`, `CLUSTERDOWN` / `TRYAGAIN` after the retries; a blocking call made while another one blocks; a blocking call's deadline passed before the write (taken out of the queue, never written); waited unwritten longer than the queue timeout (taken out of the queue, never written) | certainly not: safe to send again |
 | `RedisOutcomeUnknownException` | written, and the connection was lost before the reply, or the reply did not come within the receive timeout, or a blocking call's deadline (block time + 2 s) passed after the write | unknown: send again only if executing twice is harmless |
 
 rescredis sends again by itself only what was not sent (on `RedisCluster`, after `MOVED`, `ASK`, `TRYAGAIN`,

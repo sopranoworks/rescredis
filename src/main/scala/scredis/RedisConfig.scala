@@ -1,5 +1,5 @@
 // Modified by Sopranoworks: Scala 3 compatibility; configuration key and normalisation per build variant; reconnect backoff; connection health
-// (idle PING) and the cluster's slot refreshes.
+// (idle PING) and the cluster's slot refreshes; the queue timeout.
 package scredis
 
 import com.typesafe.config.{Config, ConfigFactory}
@@ -85,6 +85,17 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
     val ConnectTimeout = parseFiniteDuration("connect-timeout")
     val ReceiveTimeoutOpt = optionally("receive-timeout") {
       parseFiniteDuration("receive-timeout")
+    }
+
+    /**
+     * `queue-timeout`: None when it is not set (each client's receive timeout applies), Some(None) when it is 0 or
+     * infinite (a request waits unwritten as long as needed)
+     */
+    val QueueTimeoutSetting: Option[Option[FiniteDuration]] = optionally("queue-timeout") {
+      parseDuration("queue-timeout") match {
+        case d: FiniteDuration => Some(d)
+        case _ => None
+      }
     }
     
     val MaxWriteBatchSize = config.getInt("max-write-batch-size")

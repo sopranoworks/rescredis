@@ -1,7 +1,7 @@
 // Modified by Sopranoworks: reports the buffer sizes it connects with (at info level for a listener's first connection); never completes a request itself (the listener
 // fails what it sent on a connection when the connection's IOActor has stopped), a failed write closes the connection
 // instead of writing the batch again, connect failures are reported to the listener with their cause; Withdraw (a request not written yet is
-// taken out of the queue).
+// taken out of the queue); Expire (the requests that waited unwritten longer than the queue timeout are taken out of the queue).
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -123,6 +123,10 @@ class IOActor(
     case Withdraw(request, cause) =>
       val withdrawn = ListenerActor.removeIdentical(requests, request)
       listenerActor ! (if (withdrawn) Withdrawn(request, cause) else Written(request))
+    case Expire(cutoff) =>
+      // by the same rule: those still in the queue are not written, and never will be
+      val expired = ListenerActor.takeExpired(requests, cutoff)
+      if (expired.nonEmpty) listenerActor ! Expired(expired)
     case Shutdown => abort()
     case Terminated(_) =>
       listenerActor ! ListenerActor.Shutdown
@@ -236,4 +240,11 @@ object IOActor {
   final case class Withdrawn(request: Request[_], cause: Throwable)
   /** To the listener: `request` was written (or given to the TCP connection in a write that failed) */
   final case class Written(request: Request[_])
+  /**
+   * From the listener: take out of the queue the requests that have waited unwritten since before `cutoff`
+   * (System.nanoTime), whole transactions only
+   */
+  final case class Expire(cutoff: Long)
+  /** To the listener: these requests (in order) were in the queue and are taken out; they are never written */
+  final case class Expired(requests: List[Request[_]])
 }

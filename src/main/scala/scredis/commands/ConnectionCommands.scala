@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: adapted to Redis 7.4; auth is sent as given.
+// Modified by Sopranoworks: adapted to Redis 7.4; auth is sent as given; quit() completes once the client is closed.
 package scredis.commands
 
 import scredis.io.NonBlockingConnection
@@ -53,6 +53,11 @@ trait ConnectionCommands { self: NonBlockingConnection =>
 
   /**
    * Closes the connection.
+   *
+   * Completes successfully once the client is closed: when QUIT has been written and its connection has ended, with
+   * its reply or without it (closed or reset by the server, or closed after the receive timeout), and without
+   * writing it when there is no connection (none can be made, or the one it waited for could not be initialised or
+   * ended). The client makes no new connection; requests made after it fail as not sent.
    *
    * @since 1.0.0
    */
