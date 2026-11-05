@@ -1,16 +1,20 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials; BlockingStreamCommands mixed in.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials; BlockingStreamCommands mixed in;
+// withRetry; the client of the deprecated Redis.blocking.
 package scredis
 
 import akka.actor.ActorSystem
 import com.typesafe.config.Config
+import java.util.concurrent.TimeoutException
+
 import scredis.commands._
-import scredis.io.AkkaBlockingConnection
-import scredis.protocol.AuthConfig
+import scredis.exceptions.{RedisIOException, RedisNotSentException, RedisOutcomeUnknownException}
+import scredis.io.{AkkaBlockingConnection, ListenerActor}
+import scredis.protocol.{AuthConfig, Request}
 import scredis.protocol.requests.ConnectionRequests.{Auth, Quit, Select}
 import scredis.protocol.requests.ServerRequests.ClientSetName
 
 import scala.concurrent.duration._
-import scala.util.Try
+import scala.util.{Failure, Try}
 
 /**
  * Defines a Redis client supporting all blocking commands.
@@ -169,9 +173,89 @@ class BlockingClient(
    * @since 1.0.0
    */
   def quit()(implicit timeout: Duration): Try[Unit] = sendBlocking(Quit())
+
+  /**
+   * Runs `f(this)`, and again each time it fails with an error that is retried, once that error's availability has
+   * completed (see [[scredis.RetryPolicy]]): by default only [[scredis.exceptions.RedisNotSentException]], also
+   * [[scredis.exceptions.RedisOutcomeUnknownException]] with `idempotent`; Redis error replies never. The calling
+   * thread waits between attempts.
+   *
+   * {{{
+   * client.withRetry(_.blPop[String](5, "queue"), maxWaitingDuration = 30.seconds)
+   * }}}
+   *
+   * @param f one attempt
+   * @param maxWaitingDuration the longest it waits, in all, from the first attempt; then it fails with the last error
+   * @param idempotent retry an attempt whose outcome is unknown too: the caller states that `f` is idempotent
+   *
+   * @since 1.1.0
+   */
+  def withRetry[T](f: BlockingClient => Try[T], maxWaitingDuration: Duration = Duration.Inf, idempotent: Boolean = false): Try[T] =
+    RetryPolicy(maxWaitingDuration, retryOutcomeUnknown = idempotent).retryBlocking(() => f(this))
   
   watchTermination()
   
+}
+
+/**
+ * The client of the deprecated `Redis.blocking`: the blocking client with the errors it had before 1.1.0. A call
+ * waiting for the next attempt to connect makes the attempt at once, as a call made a connection then; the errors of
+ * the connection are plain [[scredis.exceptions.RedisIOException]]s with the same messages, and a call whose deadline
+ * passes fails with the bare `TimeoutException`; a call made after `quit()` goes to the stopped connection and fails
+ * so when its deadline passes. Redis error replies are unchanged.
+ */
+private[scredis] final class DeprecatedBlockingClient(
+  host: String,
+  port: Int,
+  authOpt: Option[AuthConfig],
+  database: Int,
+  nameOpt: Option[String],
+  connectTimeout: FiniteDuration,
+  maxWriteBatchSize: Int,
+  tcpSendBufferSizeHint: Int,
+  tcpReceiveBufferSizeHint: Int,
+  akkaListenerDispatcherPath: String,
+  akkaIODispatcherPath: String,
+  akkaDecoderDispatcherPath: String,
+  failCommandOnConnecting: Boolean
+)(implicit system: ActorSystem) extends BlockingClient(
+  host = host,
+  port = port,
+  authOpt = authOpt,
+  database = database,
+  nameOpt = nameOpt,
+  connectTimeout = connectTimeout,
+  maxWriteBatchSize = maxWriteBatchSize,
+  tcpSendBufferSizeHint = tcpSendBufferSizeHint,
+  tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
+  akkaListenerDispatcherPath = akkaListenerDispatcherPath,
+  akkaIODispatcherPath = akkaIODispatcherPath,
+  akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
+  failCommandOnConnecting = failCommandOnConnecting
+) {
+
+  override protected def refusesAfterClose: Boolean = false
+
+  override protected[scredis] def sendBlocking[A](request: Request[A])(implicit timeout: Duration): Try[A] = {
+    listenerActor ! ListenerActor.ConnectNow
+    try {
+      super.sendBlocking(request) match {
+        case Failure(e) => Failure(DeprecatedBlockingClient.asBefore(e))
+        case other => other
+      }
+    } catch {
+      case e: RedisIOException => throw DeprecatedBlockingClient.asBefore(e)
+    }
+  }
+}
+
+private[scredis] object DeprecatedBlockingClient {
+  /** The error as it was before 1.1.0 */
+  def asBefore(e: Throwable): Throwable = e match {
+    case u: RedisOutcomeUnknownException if u.getCause.isInstanceOf[TimeoutException] => u.getCause
+    case _: RedisNotSentException | _: RedisOutcomeUnknownException => RedisIOException(e.getMessage)
+    case other => other
+  }
 }
 
 /**

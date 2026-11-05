@@ -1,5 +1,6 @@
 // Modified by Sopranoworks: JsonCommands mixed in; tcp buffer hints and decoder dispatcher path passed on; StreamCommands mixed in;
-// WAIT routed by a key, SCRIPT LOAD / EXISTS / FLUSH sent to every master, a blocking client; availability of a key's slot and of the cluster.
+// WAIT routed by a key, SCRIPT LOAD / EXISTS / FLUSH sent to every master, a blocking client (blockingClient / withBlocking); availability of a
+// key's slot and of the cluster; withRetry.
 package scredis
 
 import akka.actor.ActorSystem
@@ -11,7 +12,7 @@ import scredis.protocol.requests.KeyRequests.WaitRoutedBy
 import scredis.protocol.requests.ScriptingRequests.{ScriptExists, ScriptFlush, ScriptLoad}
 
 import scala.concurrent.{ExecutionContext, Future}
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.{Duration, FiniteDuration}
 
 /**
   * Defines a `RedisCluster` [[scredis.Client]] supporting all non-blocking commands that can be addressed to either
@@ -75,13 +76,15 @@ class RedisCluster private[scredis](
   @volatile private var blockingInitialized = false
 
   /**
-   * Lazily initialized [[scredis.ClusterBlockingClient]]: `BLPOP`, `BRPOP`, `BRPOPLPUSH` and `XREAD … BLOCK`, each
-   * routed by its key to the master of the key's slot on a blocking connection of its own (see
-   * [[scredis.ClusterBlockingClient]] for the rule when the slot's master changes).
+   * The blocking client of this $redisCluster: `BLPOP`, `BRPOP`, `BRPOPLPUSH` and `XREAD … BLOCK`, each routed by
+   * its key to the master of the key's slot on a blocking connection of its own. One instance, created on first use
+   * and kept for the life of this $redisCluster, which `quit()` closes. Its calls fail with the error classes of
+   * 1.1.0 and follow the same policy as the non-blocking commands: only what was not sent is sent again (see
+   * [[scredis.ClusterBlockingClient]]).
    *
    * @since 1.1.0
    */
-  lazy val blocking: ClusterBlockingClient = {
+  lazy val blockingClient: ClusterBlockingClient = {
     blockingInitialized = true
     new ClusterBlockingClient(this, server => BlockingClient(
       host = server.host,
@@ -117,6 +120,37 @@ class RedisCluster private[scredis](
    * @since 1.1.0
    */
   def availability: Availability = health.availability
+
+  /**
+   * `f(blockingClient)`: the blocking client of this $redisCluster (no client is created per call).
+   *
+   * {{{
+   * cluster.withBlocking(_.blPop[String](5, "queue"))
+   * }}}
+   *
+   * @since 1.1.0
+   */
+  def withBlocking[T](f: ClusterBlockingClient => T): T = f(blockingClient)
+
+  /**
+   * Runs `f(this)`, and again each time it fails with an error that is retried, once that error's availability has
+   * completed (see [[scredis.RetryPolicy]]): by default only [[scredis.exceptions.RedisNotSentException]], also
+   * [[scredis.exceptions.RedisOutcomeUnknownException]] with `idempotent`; Redis error replies never. A request to a
+   * slot whose master is down fails at once as not sent, with the availability of the key's slot: the next attempt
+   * is made once the slot has a reachable master again (after a failover, the promoted replica).
+   *
+   * {{{
+   * cluster.withRetry(_.set("key", "value"), maxWaitingDuration = 30.seconds)
+   * }}}
+   *
+   * @param f one attempt
+   * @param maxWaitingDuration the longest it waits, in all, from the first attempt; then it fails with the last error
+   * @param idempotent retry an attempt whose outcome is unknown too: the caller states that `f` is idempotent
+   *
+   * @since 1.1.0
+   */
+  def withRetry[T](f: RedisCluster => Future[T], maxWaitingDuration: Duration = Duration.Inf, idempotent: Boolean = false): Future[T] =
+    RetryPolicy(maxWaitingDuration, retryOutcomeUnknown = idempotent).retry(() => f(this))
 
   /**
    * WAIT on the connection to the master of `key`'s slot: blocks until the writes sent before it on that
@@ -196,7 +230,7 @@ class RedisCluster private[scredis](
 
   /** Closes the blocking client, if it was used, then the cluster's connections */
   override def quit(): Future[Unit] = {
-    if (blockingInitialized) blocking.close()
+    if (blockingInitialized) blockingClient.close()
     super.quit()
   }
 

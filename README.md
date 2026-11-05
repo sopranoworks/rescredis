@@ -41,27 +41,31 @@ Changes:
   from scredis): after a connection died, a reply could complete another request, or a request never completed,
   on `Client`, `Redis`, their blocking and subscriber clients, and `RedisCluster` (see "Connections").
   Reconnecting with a backoff, logged once per change. `WAIT`; on `RedisCluster`: `wait(key, ...)`,
-  `SCRIPT LOAD` / `EXISTS` / `FLUSH` sent to every master, and a blocking client (`RedisCluster.blocking`).
+  `SCRIPT LOAD` / `EXISTS` / `FLUSH` sent to every master, and a blocking client (`RedisCluster.blockingClient`).
   Connection health (state, subscription, idle `PING`) and availability objects to wait on; connection errors
   classified as `RedisNotSentException` and `RedisOutcomeUnknownException` (both `RedisIOException`s; see
-  "Connections"); a blocking call whose deadline passes fails with `RedisOutcomeUnknownException` (was a
-  `TimeoutException`). On `RedisCluster`: node health and slot reachability, the slots read again when a node's
+  "Connections"). On `RedisCluster`: node health and slot reachability, the slots read again when a node's
   connection changes state; a request to a master known to be down fails at once as not sent, and only requests
   that were not sent are sent again. Fix: a permit of `max-concurrent-requests` is given back exactly once per
-  request (some were given back without having been taken, so the limit grew).
+  request (some were given back without having been taken, so the limit grew). The blocking client is
+  `blockingClient` / `withBlocking` on `Redis` and `RedisCluster`, with the same error classes and policy (a
+  blocking call whose deadline passes fails with `RedisOutcomeUnknownException`); **`Redis.blocking` is
+  deprecated** and keeps the errors it had in 1.0.0 (see "Connections", "Blocking client"). Retry helpers:
+  `withRetry` on `Client`, `Redis`, `RedisCluster` and the blocking clients, and `RetryPolicy`.
 
 ## Features
 * Supports all Redis commands up to v3.0.0
 * Built on top of Akka (rescredis) or Apache Pekko (rescredis-pekko) non-blocking IO
 * Automatic reconnection, with a backoff
 * Connection health, availability events, connection errors classified (not sent / outcome unknown)
+* Retry helpers (`withRetry`, `RetryPolicy`) that wait on the availability instead of polling
 * Automatic pipelining
 * Transactions
 * Pub/Sub
   * Subscribe selectively with partial functions
   * Tracked Subscribe and Unsubscribe commands (they return a Future as any other commands)
   * Automatically resubscribes to previously subscribed channels/patterns upon reconnection
-* Cluster support via `RedisCluster`, with blocking commands (`RedisCluster.blocking`)
+* Cluster support via `RedisCluster`, with blocking commands (`RedisCluster.blockingClient`)
 * JSON commands (Redis Stack / RedisJSON) on `Client`, `Redis` and `RedisCluster`: `client.Json.set(...)`
 * Stream commands (`XADD`, `XRANGE`, `XREAD`, ...; `XREAD ... BLOCK` on the blocking client)
 * Customizable serialization and deserialization of command inputs and outputs
@@ -143,8 +147,8 @@ the writes). Redis applies it to the connection it is sent on: the writes sent b
 While it blocks, the commands sent after it on that connection wait behind it, and the receive timeout applies to
 it. On a replica Redis answers an error. For `RedisCluster` see "Cluster".
 
-**Health.** Every connection (`Client`, `Redis`, their `blocking` and `subscriber` clients, each node's connection
-of `RedisCluster`, the connections of `RedisCluster.blocking`) has a `health`: its `state`, one of
+**Health.** Every connection (`Client`, `Redis`, their blocking (`blockingClient`) and `subscriber` clients, each
+node's connection of `RedisCluster`, the connections of `RedisCluster.blockingClient`) has a `health`: its `state`, one of
 `ConnectionState.Connected` (connected and initialised: `AUTH`, `SELECT` and `CLIENT SETNAME`, as configured, have
 been answered; without them, a `PING`), `Reconnecting(attempt, since, lastCause)` (the first connection is
 attempt 1 with the cause "not connected yet") and `Closed` (after `QUIT`). `health.subscribe(listener)` calls the
@@ -183,8 +187,8 @@ key's slot). What Redis answers with an error keeps its own types (`RedisErrorRe
 
 rescredis sends again by itself only what was not sent (on `RedisCluster`, after `MOVED`, `ASK`, `TRYAGAIN`,
 `CLUSTERDOWN` and a not sent request); a request whose outcome is unknown goes back to the caller, so a write is
-never executed twice by the library. (The exception is `RedisCluster.blocking`, see "Cluster".) Waiting for the
-connection and sending again:
+never executed twice by the library; the blocking clients follow the same policy. Waiting for the connection and
+sending again, by hand:
 
 ```scala
 def setWithRetry(key: String, value: String): Future[Boolean] =
@@ -195,6 +199,41 @@ def setWithRetry(key: String, value: String): Future[Boolean] =
       e.availability.whenAvailable.flatMap(_ => client.set(key, value))
   }
 ```
+
+**Retrying.** `withRetry(f, maxWaitingDuration = Duration.Inf, idempotent = false)` on `Client`, `Redis` and
+`RedisCluster` (returning a `Future`) and on the blocking clients (returning a `Try`) runs `f(client)`; when it
+fails with a retryable error it waits on **that error's** `availability.whenAvailable` (no polling, no sleeping)
+and runs `f` again, and so on. Retryable: `RedisNotSentException`; also `RedisOutcomeUnknownException` with
+`idempotent = true`, which is the caller's statement that executing `f` twice is harmless. Redis error replies are
+never retried. `maxWaitingDuration` is counted on the wall clock from the first attempt; when it is used up, or
+the client is closed meanwhile, the helper fails with the last error. There is no retry count unless the caller
+gives one. The policy is a value, `RetryPolicy(maxWaitingDuration, retryOutcomeUnknown, maxRetries)`, with
+`retry(() => future)` and `retryBlocking(() => tryValue)`, for helpers of one's own.
+
+```scala
+redis.withRetry(_.get[String]("key"), maxWaitingDuration = 30.seconds)       // Future[Option[String]]
+cluster.withRetry(_.incr("counter"))                                          // not retried if the outcome is unknown
+cluster.withRetry(_.set("key", "value"), idempotent = true)                   // SET may be sent twice: harmless
+redis.withBlocking(_.withRetry(_.blPop[String](5, "jobs")))                   // Try[Option[(String, String)]]
+RetryPolicy(maxWaitingDuration = 10.seconds).retry(() => client.ping())
+```
+
+**Blocking client.** `redis.blockingClient` is the `BlockingClient` of a `Redis`: one instance, created on first
+use and kept for the life of the `Redis`, which `quit()` closes; keep it, or use it through
+`redis.withBlocking(f)`, which is `f(redis.blockingClient)` (no client is made per call). One call is made at a
+time. Its calls fail with the classes above: no connection, a call made while another one blocks (with an
+availability that completes when that call ends) and a call after `quit()` as not sent; a call whose connection
+was lost before its reply, or whose deadline (the block time + 2 s) passed, as outcome unknown (the
+`TimeoutException` as its cause for the deadline). It does not send a call again.
+
+`Redis.blocking` is **deprecated**: refactor to `blockingClient` / `withBlocking` and the error classes as soon as
+possible. It is a client of its own (a second connection when both are used) and fails as it did in 1.0.0: a call
+whose deadline passes with a bare `TimeoutException`, the connection errors as plain `RedisIOException`s (same
+messages), and a call made while it waits for its next attempt to connect makes the attempt at once, as before.
+Those errors hide what the caller needs to know: a call that was never sent and a call that Redis may have
+executed (its connection was lost before the reply) look the same, so the caller can neither retry safely nor
+know that it must not. A changed behaviour under the old name would have broken callers silently at run time (a
+`catch` of `TimeoutException` compiles and stops matching); that is why the new behaviour has a new name.
 
 ### Quick example
 ```scala
@@ -215,7 +254,7 @@ redis.hGetAll("my-hash") onComplete {
 }
 
 // Executes a blocking command using the internal, lazily initialized BlockingClient
-redis.blocking.blPop(0, "queue")
+redis.blockingClient.blPop(0, "queue")
 
 // Shutdown all initialized internal clients along with the ActorSystem
 redis.quit()
@@ -320,22 +359,24 @@ a failover, does not have the script, and `EVALSHA` there is answered `NOSCRIPT`
 `RedisErrorResponseException`); load it again, or use `EVAL`. `SCRIPT KILL` is still not supported on
 `RedisCluster` (it would have to go to the node that runs the script).
 
-**Blocking commands.** `cluster.blocking` has `blPop`, `brPop`, `brPopLPush` and `xRead(blockMillis, ...)` with
-the signatures of `Redis.blocking`. A call is routed by its (first, or source) key to the master of the key's slot,
-on a blocking connection of its own to that node, so a blocked call does not delay the cluster's other commands;
-one call is made at a time, as on `Redis.blocking`. Keys in different slots are sent as they are (Redis answers
-`CROSSSLOT`). When the slot's master changes: a `MOVED` reply updates the slot cache and the call goes to the named
-node at once; on `CLUSTERDOWN`, `TRYAGAIN` or a failed connection the call waits (the reconnect backoff), reads the
-slots again and goes to the slot's master. Retries are made within the call's own timeout (the block time + 2 s,
-none for 0); the command is sent unchanged. When the timeout has passed, that node's blocking connection is
-replaced and the call fails with a `RedisOutcomeUnknownException` if its last attempt was written, else with a
-`RedisNotSentException`, both carrying `cluster.availability(key)`. Unlike the cluster's other commands, a
-blocking call waits within its timeout for the slot's master and is sent again after a lost connection (outcome
-unknown): a call whose node died after executing it is sent again, and an element popped on the dead master is
-not returned. `cluster.blocking.health` has the health of its connection to each node.
+**Blocking commands.** `cluster.blockingClient` (one instance, closed by `quit()`; `cluster.withBlocking(f)` uses
+it) has `blPop`, `brPop`, `brPopLPush` and `xRead(blockMillis, ...)` with the signatures of `Redis.blockingClient`.
+A call is routed by its (first, or source) key to the master of the key's slot, on a blocking connection of its
+own to that node, so a blocked call does not delay the cluster's other commands; one call is made at a time. Keys
+in different slots are sent as they are (Redis answers `CROSSSLOT`). It follows the policy of the cluster's other
+commands: a `MOVED` reply updates the slot cache and the call goes to the named node at once; when the slot's
+master is known to be down, the call is asked once of a connected node (a promoted replica is found by its
+`MOVED`) and otherwise fails at once as not sent; on `CLUSTERDOWN`, `TRYAGAIN` or a call not sent the call waits
+(the reconnect backoff), reads the slots again and is routed again, within its deadline (the block time + 2 s,
+none for 0), after which it fails as not sent. A call that was written and whose connection was lost before the
+reply, or whose deadline passed, fails as outcome unknown and is **not** sent again (an element popped on a master
+that died before its reply arrived is lost with that reply); after a deadline, the node's blocking connection is
+replaced. Both errors carry the availability of the key's slot, so `withRetry` makes the call again once the slot
+has a reachable master. `cluster.blockingClient.health` has the health of its connection to each node.
 
 ```scala
-cluster.blocking.blPop[String](5, "jobs")   // Try[Option[(String, String)]]
+cluster.blockingClient.blPop[String](5, "jobs")                // Try[Option[(String, String)]]
+cluster.withBlocking(_.withRetry(_.blPop[String](5, "jobs")))  // waits for the slot's master after a failover
 ```
 
 ## Streams
@@ -352,7 +393,7 @@ Redis defines it and return what Redis answers (errors included):
 | `xDel(key, ids*)` | `XDEL key id ...` |
 | `xTrim(key, trim)` | `XTRIM key MAXLEN\|MINID [=\|~] threshold [LIMIT count]` |
 | `xRead[R](streams, count = None)` | `XREAD [COUNT count] STREAMS key ... id ...` |
-| `blocking.xRead[R](blockMillis, streams, count = None)` | `XREAD [COUNT count] BLOCK milliseconds STREAMS key ... id ...` |
+| `blockingClient.xRead[R](blockMillis, streams, count = None)` | `XREAD [COUNT count] BLOCK milliseconds STREAMS key ... id ...` |
 
 Entry ids are `String`s, in any form Redis accepts (`*`, `<ms>-*`, `<ms>-<seq>`, `-`, `+`, `(<id>`, `$`, ...), and
 come back as Redis writes them. An entry is a `StreamEntry[R](id, fields)` with its field-value pairs in Redis'
@@ -362,14 +403,14 @@ operator `StreamTrimOperator.Exact` (`=`) or `Approximate` (`~`). Nil replies ar
 `noMkStream = true` on a missing key, and `xRead` when no stream has entries (or the block time is over).
 
 `XREAD` with `BLOCK` is a blocking command and is sent the way `BLPOP` is: on the connection of a
-`BlockingClient` (`redis.blocking`), whose call returns a `Try` once Redis answers. The caller waits 2 s longer
-than the block time; `BLOCK 0` waits without limit. `RedisCluster` has no blocking client.
+`BlockingClient` (`redis.blockingClient`), whose call returns a `Try` once Redis answers. The caller waits 2 s longer
+than the block time; `BLOCK 0` waits without limit. On `RedisCluster` it is `cluster.blockingClient.xRead`.
 
 ```scala
 val redis = Redis()
 redis.xAdd("events", Seq("room" -> "42", "op" -> "join"), trim = Some(StreamTrim.MaxLen(10000, Some(StreamTrimOperator.Approximate))))
 redis.xRead[String](Seq("events" -> "0"))                // Future[Option[List[(String, List[StreamEntry[String]])]]]
-redis.blocking.xRead[String](5000, Seq("events" -> "$"))  // Try[...]: blocks up to 5 s for a new entry
+redis.blockingClient.xRead[String](5000, Seq("events" -> "$"))  // Try[...]: blocks up to 5 s for a new entry
 ```
 
 On `RedisCluster`, a stream command goes to the node of its key; an `XREAD` of streams in several slots is sent as

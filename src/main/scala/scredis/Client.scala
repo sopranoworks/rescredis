@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: JsonCommands mixed in; StreamCommands mixed in.
+// Modified by Sopranoworks: JsonCommands mixed in; StreamCommands mixed in; withRetry.
 package scredis
 
 import akka.actor.ActorSystem
@@ -7,6 +7,7 @@ import scredis.commands._
 import scredis.io.AkkaNonBlockingConnection
 import scredis.protocol.AuthConfig
 
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
 /**
@@ -140,6 +141,24 @@ class Client(
     RedisConfig(configName, path)
   )
   
+  /**
+   * Runs `f(this)`, and again each time it fails with an error that is retried, once that error's availability has
+   * completed (see [[scredis.RetryPolicy]]): by default only [[scredis.exceptions.RedisNotSentException]], also
+   * [[scredis.exceptions.RedisOutcomeUnknownException]] with `idempotent`; Redis error replies never.
+   *
+   * {{{
+   * client.withRetry(_.get[String]("key"), maxWaitingDuration = 30.seconds)
+   * }}}
+   *
+   * @param f one attempt
+   * @param maxWaitingDuration the longest it waits, in all, from the first attempt; then it fails with the last error
+   * @param idempotent retry an attempt whose outcome is unknown too: the caller states that `f` is idempotent
+   *
+   * @since 1.1.0
+   */
+  def withRetry[T](f: Client => Future[T], maxWaitingDuration: Duration = Duration.Inf, idempotent: Boolean = false): Future[T] =
+    RetryPolicy(maxWaitingDuration, retryOutcomeUnknown = idempotent).retry(() => f(this))
+
   watchTermination()
   
 }

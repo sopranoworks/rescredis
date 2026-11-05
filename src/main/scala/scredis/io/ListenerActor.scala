@@ -2,7 +2,7 @@
 // every request is completed by this actor only, by its reply or by the end of the connection it was sent on (messages and data of an
 // earlier connection are ignored); reconnect with a backoff, state changes logged once; the receive timeout covers every outstanding request;
 // the connection's health (state, availability), a PING to learn that Redis answers on a new connection without initialisation requests, an
-// idle PING; requests that fail because of the connection fail as not sent or as outcome unknown.
+// idle PING; requests that fail because of the connection fail as not sent or as outcome unknown; ConnectNow (the next attempt at once).
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -360,6 +360,7 @@ class ListenerActor(
     case Terminated(_) =>
     case ReceiveTimedOut(_) =>
     case ReconnectNow(_) =>
+    case ConnectNow =>
     case IdleTick(_) =>
     case PingTimedOut(_, _) =>
   }
@@ -516,6 +517,8 @@ class ListenerActor(
       }
     case ReconnectNow(number) if number == connectionNumber && !isConnecting =>
       reconnect()
+    case ConnectNow if !isConnecting && !isShuttingDownBeforeConnected =>
+      reconnect()
     case Connected(connection) if isIOActor(sender()) =>
       isConnecting = false
       tcpConnection = connection
@@ -670,4 +673,10 @@ object ListenerActor {
   case class CredentialsAccepted(credentials: AuthConfig)
   /** Do not send `AUTH` on later reconnects. */
   case object ClearCredentials
+  /**
+   * While waiting for the next attempt to connect (the backoff): make it now; the requests that follow wait for it.
+   * Ignored otherwise. The deprecated `Redis.blocking` sends it before every call, as a call made a connection
+   * before 1.1.0.
+   */
+  private[scredis] case object ConnectNow
 }

@@ -3,7 +3,7 @@
 // (it reconnects with the backoff) instead of being replaced by a new one; requests sent to every master (keyless script
 // commands); the slot cache and the actor system for the cluster's blocking client; node health and slot reachability, the slots read
 // again when a node's state changes and while a slot is unreachable; a request to a master known to be down fails at once as not sent;
-// only requests that were not sent are sent again, an outcome unknown goes to the caller.
+// only requests that were not sent are sent again, an outcome unknown goes to the caller; the nodes' state for the blocking client.
 package scredis.io
 
 import akka.actor.ActorSystem
@@ -435,6 +435,16 @@ abstract class ClusterConnection(
 
   /** Reads the slots and their masters from the cluster again (CLUSTER SLOTS) */
   private[scredis] def refreshSlots(): Future[Unit] = updateCache(maxRetries)
+
+  /** True when this client waits for its next attempt to connect to `server` (or that connection is closed) */
+  private[scredis] def isNodeKnownDown(server: Server): Boolean = isKnownDown(server)
+
+  /** A node other than `server` whose connection is connected */
+  private[scredis] def connectedNodeOtherThan(server: Server): Option[Server] =
+    connections.keys.find(s => s != server && connections(s)._1.health.state == ConnectionState.Connected)
+
+  /** A node to send a request to that any node can answer (see [[anyAvailableServer]]) */
+  private[scredis] def anyNode: Option[Server] = anyAvailableServer(Set.empty)
 
   /**
    * Sends a request made by `request` to every master, each on its own connection, without the retries of [[send]]

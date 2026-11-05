@@ -49,6 +49,9 @@ lazy val common = Seq(
     }
   },
   Compile / doc / scalacOptions := Seq("-no-link-warnings"),
+  // the specs from before 1.1.0 use the deprecated Redis.blocking as they did: that deprecation is reported as
+  // information in the tests, every other warning stays fatal
+  Test / scalacOptions += "-Wconf:cat=deprecation&msg=use blockingClient:i",
 
   // the shared sources and the version directories (scala-2.13, scala-3, ...) are in src/
   Compile / sourceDirectory := repoRoot / "src" / "main",

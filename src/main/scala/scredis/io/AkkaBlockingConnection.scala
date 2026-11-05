@@ -1,11 +1,14 @@
 // Modified by Sopranoworks: credentials kept only once accepted; closeAsync; health; a call refused while another one blocks fails as
-// not sent, a call whose deadline passes as outcome unknown.
+// not sent (with an availability that completes when that call ends), a call whose deadline passes as outcome unknown, a call
+// made after QUIT as not sent.
 package scredis.io
 
+import java.time.Instant
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.locks.ReentrantLock
 
 import akka.actor._
+import scredis.Availability
 import scredis.exceptions._
 import scredis.protocol._
 import scredis.protocol.requests.ConnectionRequests.Quit
@@ -76,21 +79,34 @@ abstract class AkkaBlockingConnection(
     UniqueNameGenerator.getUniqueName(s"${nameOpt.getOrElse(s"$host-$port")}-listener-actor")
   )
   
+  // while a call is made: completes when it ends (the availability of a call refused meanwhile)
+  @volatile private var busy: Availability = Availability.Available
+
   private def withLock[A](f: => A): A = {
     if (lock.tryLock) {
+      busy = Availability.outage(Instant.now(), "a blocking call is in progress on the connection")
       try {
         f
       } finally {
+        busy.complete()
         lock.unlock()
       }
     } else {
-      throw new RedisNotSentException("Trying to send request on a blocked connection", health.availability)
+      throw new RedisNotSentException("Trying to send request on a blocked connection", busy)
     }
   }
-  
+
+  /** False: a call made after the connection was closed goes to the stopped connection (as before 1.1.0) */
+  protected def refusesAfterClose: Boolean = true
+
   override protected[scredis] def sendBlocking[A](request: Request[A])(
     implicit timeout: Duration
   ): Try[A] = withLock {
+    if (isShuttingDown && refusesAfterClose) Failure(closedNotSent("Connection has been shutdown"))
+    else write(request)
+  }
+
+  private def write[A](request: Request[A])(implicit timeout: Duration): Try[A] = {
     logger.debug(s"Sending blocking request: $request")
     updateState(request)
     val future = keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))

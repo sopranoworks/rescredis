@@ -1,4 +1,5 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant; tcp receive buffer hint, failCommandOnConnecting of the blocking client, credentials (clearCredentials); StreamCommands mixed in.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth), auth passes the username to every client, clientSetName documented, JsonCommands mixed in, configuration per build variant; tcp receive buffer hint, failCommandOnConnecting of the blocking client, credentials (clearCredentials); StreamCommands mixed in;
+// blockingClient / withBlocking (the error classes of 1.1.0), blocking deprecated with its errors from before 1.1.0, withRetry.
 package scredis
 
 import akka.actor._
@@ -13,7 +14,7 @@ import scala.concurrent.duration._
 
 /**
  * Defines a `Redis` [[scredis.Client]] supporting all non-blocking commands along with a lazily
- * initialized [[scredis.BlockingClient]] and [[scredis.SubscriberClient]].
+ * initialized [[scredis.BlockingClient]] (`blockingClient`) and [[scredis.SubscriberClient]].
  * 
  * @define e [[scredis.exceptions.RedisErrorResponseException]]
  * @define redis [[scredis.Redis]]
@@ -71,15 +72,26 @@ class Redis private[scredis] (
   with TransactionCommands
   with JsonCommands {
   
-  private var shouldShutdownBlockingClient = false
+  @volatile private var shouldShutdownBlockingClient = false
+  @volatile private var shouldShutdownDeprecatedBlockingClient = false
   private var shouldShutdownSubscriberClient = false
 
   private val defaultBlockingTimeout: FiniteDuration = 5.seconds
   
   /**
-   * Lazily initialized [[scredis.BlockingClient]].
+   * The blocking client of this $redis: one instance, created on first use and kept for the life of this $redis,
+   * which `quit()` closes. Keep it, or use it through `withBlocking`; a call is made at a time.
+   *
+   * A call fails with the error classes of 1.1.0 (see the README, "Connections"): a call made while there is no
+   * connection, while another call blocks, or after `quit()` fails as not sent
+   * ([[scredis.exceptions.RedisNotSentException]]); a call that was written and whose connection was lost before
+   * the reply, or whose deadline (the block time + 2 s) passed, fails as outcome unknown
+   * ([[scredis.exceptions.RedisOutcomeUnknownException]], with the `TimeoutException` as the cause for the
+   * deadline), and is not sent again. Both carry the availability to wait on; `withRetry` waits on it.
+   *
+   * @since 1.1.0
    */
-  lazy val blocking: BlockingClient = {
+  lazy val blockingClient: BlockingClient = {
     shouldShutdownBlockingClient = true
     BlockingClient(
       host = host,
@@ -97,6 +109,76 @@ class Redis private[scredis] (
       failCommandOnConnecting = failCommandOnConnecting
     )(system)
   }
+
+  /**
+   * `f(blockingClient)`: the blocking client of this $redis (no client is created per call).
+   *
+   * {{{
+   * redis.withBlocking(_.blPop[String](5, "queue"))
+   * }}}
+   *
+   * @since 1.1.0
+   */
+  def withBlocking[T](f: BlockingClient => T): T = f(blockingClient)
+
+  private lazy val deprecatedBlocking: BlockingClient = {
+    shouldShutdownDeprecatedBlockingClient = true
+    new DeprecatedBlockingClient(
+      host = host,
+      port = port,
+      authOpt = getAuthOpt,
+      database = getDatabase,
+      nameOpt = getNameOpt,
+      connectTimeout = connectTimeout,
+      maxWriteBatchSize = maxWriteBatchSize,
+      tcpSendBufferSizeHint = tcpSendBufferSizeHint,
+      tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
+      akkaListenerDispatcherPath = akkaListenerDispatcherPath,
+      akkaIODispatcherPath = akkaIODispatcherPath,
+      akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
+      failCommandOnConnecting = failCommandOnConnecting
+    )(system)
+  }
+
+  /**
+   * Lazily initialized [[scredis.BlockingClient]], with the errors it had before 1.1.0.
+   *
+   * Refactor to `blockingClient` / `withBlocking` and the error classes as soon as possible. The errors of this
+   * client hide what the caller needs to know: a call whose deadline passes fails with a bare `TimeoutException`,
+   * and the other connection errors are plain [[scredis.exceptions.RedisIOException]]s, so a call that was never
+   * sent and a call that Redis may have executed (its connection was lost before the reply: its outcome is unknown)
+   * cannot be told apart. `blockingClient` fails with [[scredis.exceptions.RedisNotSentException]] (safe to send
+   * again) or [[scredis.exceptions.RedisOutcomeUnknownException]] (send again only if executing twice is harmless),
+   * each with the availability to wait on.
+   *
+   * It is a client of its own, beside `blockingClient` (a connection each, when both are used). As before 1.1.0, a
+   * call made while the connection waits for its next attempt makes the attempt at once.
+   */
+  @deprecated("use blockingClient / withBlocking: their errors say whether a call was sent (RedisNotSentException, RedisOutcomeUnknownException); this one's hide it", "1.1.0")
+  lazy val blocking: BlockingClient = deprecatedBlocking
+
+  /**
+   * Runs `f(this)`, and again each time it fails with an error that is retried, once that error's availability has
+   * completed (see [[scredis.RetryPolicy]]): by default only [[scredis.exceptions.RedisNotSentException]], also
+   * [[scredis.exceptions.RedisOutcomeUnknownException]] with `idempotent`; Redis error replies never.
+   *
+   * {{{
+   * redis.withRetry(_.get[String]("key"), maxWaitingDuration = 30.seconds)
+   * }}}
+   *
+   * @param f one attempt
+   * @param maxWaitingDuration the longest it waits, in all, from the first attempt; then it fails with the last error
+   * @param idempotent retry an attempt whose outcome is unknown too: the caller states that `f` is idempotent
+   *
+   * @since 1.1.0
+   */
+  def withRetry[T](f: Redis => Future[T], maxWaitingDuration: Duration = Duration.Inf, idempotent: Boolean = false): Future[T] =
+    RetryPolicy(maxWaitingDuration, retryOutcomeUnknown = idempotent).retry(() => f(this))
+
+  /** The blocking clients of this $redis that have been initialised */
+  private def blockingClients: List[BlockingClient] =
+    (if (shouldShutdownBlockingClient) List(blockingClient) else Nil) ++
+      (if (shouldShutdownDeprecatedBlockingClient) List(deprecatedBlocking) else Nil)
   
   /**
    * Lazily initialized [[scredis.SubscriberClient]].
@@ -262,9 +344,9 @@ class Redis private[scredis] (
    * @since 1.0.0
    */
   override def auth(password: String, username: Option[String]): Future[Unit] = {
-    if (shouldShutdownBlockingClient) {
+    blockingClients.foreach { client =>
       try {
-        blocking.auth(password, username)(defaultBlockingTimeout)
+        client.auth(password, username)(defaultBlockingTimeout)
       } catch {
         case e: Throwable => logger.error("Could not authenticate blocking client", e)
       }
@@ -288,9 +370,7 @@ class Redis private[scredis] (
    * @since 1.0.0
    */
   override def clearCredentials(): Unit = {
-    if (shouldShutdownBlockingClient) {
-      blocking.clearCredentials()
-    }
+    blockingClients.foreach(_.clearCredentials())
     if (shouldShutdownSubscriberClient) {
       subscriber.clearCredentials()
     }
@@ -311,9 +391,9 @@ class Redis private[scredis] (
    * @since 2.6.9
    */
   override def clientSetName(name: String): Future[Unit] = {
-    if (shouldShutdownBlockingClient) {
+    blockingClients.foreach { client =>
       try {
-        blocking.clientSetName(name)(defaultBlockingTimeout)
+        client.clientSetName(name)(defaultBlockingTimeout)
       } catch {
         case e: Throwable => logger.error("Could not set client name on blocking client", e)
       }
@@ -336,10 +416,10 @@ class Redis private[scredis] (
    * @since 1.0.0
    */
   override def quit(): Future[Unit] = {
-    if (shouldShutdownBlockingClient) {
+    blockingClients.foreach { client =>
       try {
-        blocking.quit()(defaultBlockingTimeout)
-        blocking.awaitTermination(defaultBlockingTimeout)
+        client.quit()(defaultBlockingTimeout)
+        client.awaitTermination(defaultBlockingTimeout)
       } catch {
         case e: Throwable => logger.error("Could not shutdown blocking client", e)
       }
@@ -374,9 +454,9 @@ class Redis private[scredis] (
    * @since 1.0.0
    */
   override def select(database: Int): Future[Unit] = {
-    if (shouldShutdownBlockingClient) {
+    blockingClients.foreach { client =>
       try {
-        blocking.select(database)(defaultBlockingTimeout)
+        client.select(database)(defaultBlockingTimeout)
       } catch {
         case e: Throwable => Future.failed(e)
       }
