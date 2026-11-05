@@ -9,8 +9,10 @@ import scredis.Availability
  *
  * A request fails with it when there is no connection (the connection could not be made, or the client waits for
  * its next reconnect attempt), when it is addressed to a node or a slot's master that is known to be down, with
- * `fail-command-on-connecting` while connecting, after the connection was closed (QUIT), and on a cluster after
- * `CLUSTERDOWN` / `TRYAGAIN` replies when the retries are used up.
+ * `fail-command-on-connecting` while connecting, after the connection was closed (QUIT), when a blocking call's
+ * deadline passes before its request was written (the `TimeoutException` as its cause; the request is taken out of
+ * the queue and never written), and on a cluster after `CLUSTERDOWN` / `TRYAGAIN` replies when the retries are used
+ * up.
  *
  * @param availability completes when the connection, or the master of the key's slot, is usable again
  *

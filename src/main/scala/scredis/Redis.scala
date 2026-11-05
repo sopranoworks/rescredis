@@ -83,13 +83,15 @@ class Redis private[scredis] (
    * which `quit()` closes. Keep it, or use it through `withBlocking`; a call is made at a time.
    *
    * A call fails with the error classes of 1.1.0 (see the README, "Connections"): a call made while there is no
-   * connection, while another call blocks, or after `quit()` fails as not sent
-   * ([[scredis.exceptions.RedisNotSentException]]); a call that was written and whose connection was lost before
-   * the reply, or whose deadline (the block time + 2 s) passed, fails as outcome unknown
-   * ([[scredis.exceptions.RedisOutcomeUnknownException]], with the `TimeoutException` as the cause for the
-   * deadline), and is not sent again. Both carry the availability to wait on; `withRetry` waits on it. After a
-   * deadline the connection, which may still be blocked in Redis, is closed and replaced (as on `RedisCluster`): the
-   * next call is made on a new connection, and a late reply reaches nobody.
+   * connection, while another call blocks, or after `quit()`, and a call whose deadline passes before it was written
+   * (it waited for the connection), fail as not sent ([[scredis.exceptions.RedisNotSentException]], the
+   * `TimeoutException` as the cause for the deadline; the call is never written later); a call that was written and
+   * whose connection was lost before the reply, or whose deadline (the block time + 2 s) passed after it was
+   * written, fails as outcome unknown ([[scredis.exceptions.RedisOutcomeUnknownException]], with the
+   * `TimeoutException` as the cause for the deadline), and is not sent again. Both carry the availability to wait on;
+   * `withRetry` waits on it. After a deadline that passed after the write the connection, which may still be blocked
+   * in Redis, is closed and replaced (as on `RedisCluster`): the next call is made on a new connection, and a late
+   * reply reaches nobody.
    *
    * @since 1.1.0
    */

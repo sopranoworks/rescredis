@@ -201,7 +201,8 @@ class BlockingClient(
  * The client of the deprecated `Redis.blocking`: the blocking client with the errors it had before 1.1.0. A call
  * waiting for the next attempt to connect makes the attempt at once, as a call made a connection then; the errors of
  * the connection are plain [[scredis.exceptions.RedisIOException]]s with the same messages, and a call whose deadline
- * passes fails with the bare `TimeoutException`, and the connection is kept; a call made after `quit()` goes to the
+ * passes fails with the bare `TimeoutException` and is left where it waits (one not written yet is written later and
+ * executed), and the connection is kept; a call made after `quit()` goes to the
  * stopped connection and fails so when its deadline passes. Redis error replies are unchanged.
  */
 private[scredis] final class DeprecatedBlockingClient(

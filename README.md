@@ -182,8 +182,8 @@ key's slot). What Redis answers with an error keeps its own types (`RedisErrorRe
 
 | Class | When | Executed? |
 |---|---|---|
-| `RedisNotSentException` | no connection (an attempt failed, or the client waits for its next attempt); addressed to a node or a slot's master known to be down; `fail-command-on-connecting` while connecting; after `QUIT`; on `RedisCluster`, `CLUSTERDOWN` / `TRYAGAIN` after the retries; a blocking call made while another one blocks | certainly not: safe to send again |
-| `RedisOutcomeUnknownException` | written, and the connection was lost before the reply, or the reply did not come within the receive timeout, or a blocking call's deadline (block time + 2 s) passed | unknown: send again only if executing twice is harmless |
+| `RedisNotSentException` | no connection (an attempt failed, or the client waits for its next attempt); addressed to a node or a slot's master known to be down; `fail-command-on-connecting` while connecting; after `QUIT`; on `RedisCluster`, `CLUSTERDOWN` / `TRYAGAIN` after the retries; a blocking call made while another one blocks; a blocking call's deadline passed before the write (taken out of the queue, never written) | certainly not: safe to send again |
+| `RedisOutcomeUnknownException` | written, and the connection was lost before the reply, or the reply did not come within the receive timeout, or a blocking call's deadline (block time + 2 s) passed after the write | unknown: send again only if executing twice is harmless |
 
 rescredis sends again by itself only what was not sent (on `RedisCluster`, after `MOVED`, `ASK`, `TRYAGAIN`,
 `CLUSTERDOWN` and a not sent request); a request whose outcome is unknown goes back to the caller, so a write is
@@ -222,12 +222,13 @@ RetryPolicy(maxWaitingDuration = 10.seconds).retry(() => client.ping())
 use and kept for the life of the `Redis`, which `quit()` closes; keep it, or use it through
 `redis.withBlocking(f)`, which is `f(redis.blockingClient)` (no client is made per call). One call is made at a
 time. Its calls fail with the classes above: no connection, a call made while another one blocks (with an
-availability that completes when that call ends) and a call after `quit()` as not sent; a call whose connection
-was lost before its reply, or whose deadline (the block time + 2 s) passed, as outcome unknown (the
-`TimeoutException` as its cause for the deadline). It does not send a call again. After a deadline, both
-`redis.blockingClient` and `cluster.blockingClient` close the connection the call was made on and make the next
-call on a new one, so a late reply reaches no caller; the deprecated `Redis.blocking` keeps its connection, as in
-1.0.0.
+availability that completes when that call ends), a call after `quit()` and a call whose deadline passed before it
+was written (it waited for the connection; it is taken out of the queue and never written later) as not sent; a
+call whose connection was lost before its reply, or whose deadline (the block time + 2 s) passed after it was
+written, as outcome unknown (the `TimeoutException` as its cause for the deadline). It does not send a call
+again. After a deadline that passed after the write, both `redis.blockingClient` and `cluster.blockingClient` close the connection the call was
+made on and make the next call on a new one, so a late reply reaches no caller; the deprecated `Redis.blocking`
+keeps its connection, as in 1.0.0.
 
 `Redis.blocking` is **deprecated**: refactor to `blockingClient` / `withBlocking` and the error classes as soon as
 possible. It is a client of its own (a second connection when both are used) and fails as it did in 1.0.0: a call
@@ -371,7 +372,8 @@ commands: a `MOVED` reply updates the slot cache and the call goes to the named 
 master is known to be down, the call is asked once of a connected node (a promoted replica is found by its
 `MOVED`) and otherwise fails at once as not sent; on `CLUSTERDOWN`, `TRYAGAIN` or a call not sent the call waits
 (the reconnect backoff), reads the slots again and is routed again, within its deadline (the block time + 2 s,
-none for 0), after which it fails as not sent. A call that was written and whose connection was lost before the
+none for 0), after which it fails as not sent; so does a call whose deadline passes before it was written on the
+node's connection (it is never written later). A call that was written and whose connection was lost before the
 reply, or whose deadline passed, fails as outcome unknown and is **not** sent again (an element popped on a master
 that died before its reply arrived is lost with that reply); after a deadline, the node's blocking connection is
 replaced. Both errors carry the availability of the key's slot, so `withRetry` makes the call again once the slot

@@ -3,7 +3,8 @@
 // earlier connection are ignored); reconnect with a backoff, state changes logged once; the receive timeout covers every outstanding request;
 // the connection's health (state, availability), a PING to learn that Redis answers on a new connection without initialisation requests, an
 // idle PING; requests that fail because of the connection fail as not sent or as outcome unknown; ConnectNow (the next attempt at once);
-// DeadlinePassed (the connection of a blocking call whose deadline passed is replaced).
+// DeadlinePassed (a blocking call whose deadline passed: its request taken out of the queue and failed as not sent when it was not written,
+// else the connection replaced).
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -100,7 +101,8 @@ class ListenerActor(
   private val idlePingTimeout = RedisConfigDefaults.IO.Health.IdlePingTimeout
 
   /** A request that fails before it was sent: certainly not executed */
-  protected def notSent(message: String): RedisNotSentException = new RedisNotSentException(message, health.availability)
+  protected def notSent(message: String, cause: Throwable = null): RedisNotSentException =
+    new RedisNotSentException(message, health.availability, cause)
 
   /** A request that was written and whose reply will not come: the outcome is unknown */
   protected def outcomeUnknown(message: String): RedisOutcomeUnknownException =
@@ -360,9 +362,16 @@ class ListenerActor(
     case Abort | Shutdown =>
     case Terminated(_) =>
     case ReceiveTimedOut(_) =>
+    case IOActor.Withdrawn(request, cause) =>
+      // the IOActor of the current connection has taken it out of its queue: it was not written and never will be
+      if (isIOActor(sender()) && removeSent(request)) {
+        log.debug(s"The deadline of the blocking call $request passed before it was written; not sent")
+        request.failure(notSent(s"Not sent within its deadline: $request", cause))
+      }
     case ReconnectNow(_) =>
     case ConnectNow =>
-    case DeadlinePassed(_) =>
+    case DeadlinePassed(_, _) =>
+    case IOActor.Written(_) =>
     case IdleTick(_) =>
     case PingTimedOut(_, _) =>
   }
@@ -463,12 +472,29 @@ class ListenerActor(
     found
   }
 
+  /** Removes `request` itself from the requests sent on the current connection (only when it was not written) */
+  private def removeSent(request: Request[_]): Boolean = removeIdentical(requests, request)
+
   /**
-   * The deadline of a blocking call passed: when it was written on the current connection and is not answered, the
-   * connection is closed (it may still be blocked in Redis) and a new one is made; its late reply reaches nobody.
+   * The deadline of a blocking call passed while its request waits in this actor's queue (connecting, initializing,
+   * reconnecting): it is taken out, so it is never written, and fails as not sent.
    */
-  private def deadlines: Receive = {
-    case DeadlinePassed(request) if isSent(request) =>
+  private def queuedDeadlines: Receive = {
+    case DeadlinePassed(request, cause) if removeIdentical(queuedRequests, request) =>
+      log.debug(s"The deadline of the blocking call $request passed while it was queued; not sent")
+      request.failure(notSent(s"Not sent within its deadline: $request", cause))
+  }
+
+  /**
+   * The deadline of a blocking call passed after its request was given to the IOActor of the current connection and
+   * before its reply: the IOActor, which writes it, decides. Still in its queue, it takes it out (`Withdrawn`, see
+   * `always`): not sent. Written (`Written`): the connection is closed (it may still be blocked in Redis) and a new
+   * one is made; the request fails as outcome unknown with the connection, and its late reply reaches nobody.
+   */
+  private def deadlines: Receive = queuedDeadlines orElse {
+    case DeadlinePassed(request, cause) if isSent(request) =>
+      ioActor ! IOActor.Withdraw(request, cause)
+    case IOActor.Written(request) if isIOActor(sender()) && isSent(request) =>
       log.debug(s"No reply to the blocking call $request within its deadline; replacing the connection to $remote")
       closeConnection("the deadline of a blocking call passed")
   }
@@ -510,7 +536,7 @@ class ListenerActor(
   // Connecting (an attempt is in progress: isConnecting), or waiting for the next attempt after a failed one (the
   // backoff, ReconnectNow is scheduled). Requests wait for an attempt in progress; while there is none they fail at
   // once (a RedisCluster then sends them to another node), as do all with failCommandOnConnecting.
-  def connecting: Receive = {
+  def connecting: Receive = queuedDeadlines orElse {
     case request: Quit =>
       request.success(())
       health.closed()
@@ -645,7 +671,7 @@ class ListenerActor(
       connectionEnded("Connection has been shutdown abruptly")
   }
   
-  def reconnecting: Receive = queue orElse {
+  def reconnecting: Receive = queue orElse queuedDeadlines orElse {
     case Terminated(ref) if isIOActor(ref) =>
       closingCause match {
         case Some("receive timeout") => connectionEnded("Receive timeout")
@@ -700,9 +726,22 @@ object ListenerActor {
    */
   private[scredis] case object ConnectNow
   /**
-   * The deadline of the blocking call `request` passed: when it was written on the current connection and is not
-   * answered, the connection is replaced. Ignored otherwise. Sent by the blocking connections (not by the deprecated
-   * `Redis.blocking`, which keeps its connection as before 1.1.0).
+   * The deadline of the blocking call `request` passed (`cause`): when it was not written (queued here, or still in
+   * the IOActor's queue) it is taken out and fails as not sent; when it was written on the current connection and is
+   * not answered, the connection is replaced and it fails as outcome unknown. Ignored otherwise (answered, or its
+   * connection already ending). Sent by the blocking connections (not by the deprecated `Redis.blocking`, which leaves
+   * the request and the connection as before 1.1.0).
    */
-  private[scredis] final case class DeadlinePassed(request: Request[_])
+  private[scredis] final case class DeadlinePassed(request: Request[_], cause: Throwable)
+
+  /** Removes `request` itself from `list`; true when it was there */
+  private[io] def removeIdentical(list: util.LinkedList[Request[_]], request: Request[_]): Boolean = {
+    val it = list.iterator()
+    var found = false
+    while (!found && it.hasNext) if (it.next() eq request) {
+      it.remove()
+      found = true
+    }
+    found
+  }
 }

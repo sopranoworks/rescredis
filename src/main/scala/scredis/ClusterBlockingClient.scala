@@ -39,6 +39,8 @@ import scala.util.{Failure, Try}
  *  - `CLUSTERDOWN`, `TRYAGAIN` and a call not sent (no connection to the master): after a wait
  *    (`scredis.io.reconnect`: min-backoff, doubling up to max-backoff) the slots are read again (`CLUSTER SLOTS`) and
  *    the call is routed by its slot again, within its deadline; when the deadline has passed it fails as not sent.
+ *    A call whose deadline passes before it was written on the node's connection is taken out of that connection's
+ *    queue (by the same rule as `Redis.blockingClient`) and fails so too, never written later.
  *  - A call that was written and whose connection was lost before the reply, or whose deadline passed, fails as
  *    outcome unknown ([[scredis.exceptions.RedisOutcomeUnknownException]], the `TimeoutException` as the cause for
  *    the deadline) with the availability of the key's slot, and is **not** sent again: Redis may have executed it

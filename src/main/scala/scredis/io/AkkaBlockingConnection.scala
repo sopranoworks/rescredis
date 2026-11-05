@@ -1,6 +1,7 @@
 // Modified by Sopranoworks: credentials kept only once accepted; closeAsync; health; a call refused while another one blocks fails as
-// not sent (with an availability that completes when that call ends), a call whose deadline passes as outcome unknown (and its
-// connection replaced), a call made after QUIT as not sent.
+// not sent (with an availability that completes when that call ends), a call whose deadline passes before its request is written as
+// not sent (the request taken out of the queue), after it as outcome unknown (and its connection replaced), a call made after QUIT
+// as not sent.
 package scredis.io
 
 import java.time.Instant
@@ -99,7 +100,10 @@ abstract class AkkaBlockingConnection(
   /** False: a call made after the connection was closed goes to the stopped connection (as before 1.1.0) */
   protected def refusesAfterClose: Boolean = true
 
-  /** False: the connection is kept after a call whose deadline passed (as before 1.1.0) */
+  /**
+   * False: after a call whose deadline passed, its request is left where it waits and the connection is kept (as
+   * before 1.1.0)
+   */
   protected def discardsOnDeadline: Boolean = true
 
   override protected[scredis] def sendBlocking[A](request: Request[A])(
@@ -113,13 +117,21 @@ abstract class AkkaBlockingConnection(
     logger.debug(s"Sending blocking request: $request")
     updateState(request)
     val future = keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))
-    // the deadline of a blocking call passing: it was written, and its reply has not come (the connection may still
-    // be blocked in Redis). The connection is closed and replaced, so that a late reply reaches nobody and the next
-    // call does not wait behind this one.
+    // the deadline of a blocking call passing: the listener decides whether the request was written. Not written, it
+    // is taken out of the queue and fails as not sent; written, its reply has not come (the connection may still be
+    // blocked in Redis): the connection is closed and replaced, so that a late reply reaches nobody and the next call
+    // does not wait behind this one. The listener completes the request either way; this call waits for that.
     Try(Await.result(future, timeout)).recoverWith {
       case e: TimeoutException =>
-        if (discardsOnDeadline) listenerActor ! ListenerActor.DeadlinePassed(request)
-        Failure(new RedisOutcomeUnknownException(s"No reply to $request within $timeout", health.availability, e))
+        if (discardsOnDeadline) {
+          listenerActor ! ListenerActor.DeadlinePassed(request, e)
+          Try(Await.ready(future, AkkaBlockingConnection.DeadlineDecisionWait))
+        }
+        future.value match {
+          case Some(Failure(notSent: RedisNotSentException)) if discardsOnDeadline => Failure(notSent)
+          case _ =>
+            Failure(new RedisOutcomeUnknownException(s"No reply to $request within $timeout", health.availability, e))
+        }
     }
   }
 
@@ -133,4 +145,12 @@ abstract class AkkaBlockingConnection(
     Protocol.send(quit, listenerActor)
   }
   
+}
+
+private[scredis] object AkkaBlockingConnection {
+  /**
+   * After a deadline, how long a call waits for the listener to complete its request (taken out of the queue, or
+   * failed when the connection it was written on has closed); past it the call fails as outcome unknown.
+   */
+  val DeadlineDecisionWait: FiniteDuration = 5.seconds
 }
