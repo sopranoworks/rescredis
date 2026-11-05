@@ -1,5 +1,5 @@
 // Modified by Sopranoworks: adapted to Redis 7.4 (auth documentation); auth is sent as given, clearCredentials; BlockingStreamCommands mixed in;
-// withRetry; the client of the deprecated Redis.blocking.
+// withRetry; the client of the deprecated Redis.blocking (its connection kept after a deadline).
 package scredis
 
 import akka.actor.ActorSystem
@@ -201,8 +201,8 @@ class BlockingClient(
  * The client of the deprecated `Redis.blocking`: the blocking client with the errors it had before 1.1.0. A call
  * waiting for the next attempt to connect makes the attempt at once, as a call made a connection then; the errors of
  * the connection are plain [[scredis.exceptions.RedisIOException]]s with the same messages, and a call whose deadline
- * passes fails with the bare `TimeoutException`; a call made after `quit()` goes to the stopped connection and fails
- * so when its deadline passes. Redis error replies are unchanged.
+ * passes fails with the bare `TimeoutException`, and the connection is kept; a call made after `quit()` goes to the
+ * stopped connection and fails so when its deadline passes. Redis error replies are unchanged.
  */
 private[scredis] final class DeprecatedBlockingClient(
   host: String,
@@ -235,6 +235,8 @@ private[scredis] final class DeprecatedBlockingClient(
 ) {
 
   override protected def refusesAfterClose: Boolean = false
+
+  override protected def discardsOnDeadline: Boolean = false
 
   override protected[scredis] def sendBlocking[A](request: Request[A])(implicit timeout: Duration): Try[A] = {
     listenerActor ! ListenerActor.ConnectNow

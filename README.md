@@ -224,7 +224,10 @@ use and kept for the life of the `Redis`, which `quit()` closes; keep it, or use
 time. Its calls fail with the classes above: no connection, a call made while another one blocks (with an
 availability that completes when that call ends) and a call after `quit()` as not sent; a call whose connection
 was lost before its reply, or whose deadline (the block time + 2 s) passed, as outcome unknown (the
-`TimeoutException` as its cause for the deadline). It does not send a call again.
+`TimeoutException` as its cause for the deadline). It does not send a call again. After a deadline, both
+`redis.blockingClient` and `cluster.blockingClient` close the connection the call was made on and make the next
+call on a new one, so a late reply reaches no caller; the deprecated `Redis.blocking` keeps its connection, as in
+1.0.0.
 
 `Redis.blocking` is **deprecated**: refactor to `blockingClient` / `withBlocking` and the error classes as soon as
 possible. It is a client of its own (a second connection when both are used) and fails as it did in 1.0.0: a call

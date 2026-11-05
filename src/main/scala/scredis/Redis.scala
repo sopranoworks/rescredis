@@ -87,7 +87,9 @@ class Redis private[scredis] (
    * ([[scredis.exceptions.RedisNotSentException]]); a call that was written and whose connection was lost before
    * the reply, or whose deadline (the block time + 2 s) passed, fails as outcome unknown
    * ([[scredis.exceptions.RedisOutcomeUnknownException]], with the `TimeoutException` as the cause for the
-   * deadline), and is not sent again. Both carry the availability to wait on; `withRetry` waits on it.
+   * deadline), and is not sent again. Both carry the availability to wait on; `withRetry` waits on it. After a
+   * deadline the connection, which may still be blocked in Redis, is closed and replaced (as on `RedisCluster`): the
+   * next call is made on a new connection, and a late reply reaches nobody.
    *
    * @since 1.1.0
    */

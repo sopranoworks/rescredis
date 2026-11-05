@@ -2,7 +2,8 @@
 // every request is completed by this actor only, by its reply or by the end of the connection it was sent on (messages and data of an
 // earlier connection are ignored); reconnect with a backoff, state changes logged once; the receive timeout covers every outstanding request;
 // the connection's health (state, availability), a PING to learn that Redis answers on a new connection without initialisation requests, an
-// idle PING; requests that fail because of the connection fail as not sent or as outcome unknown; ConnectNow (the next attempt at once).
+// idle PING; requests that fail because of the connection fail as not sent or as outcome unknown; ConnectNow (the next attempt at once);
+// DeadlinePassed (the connection of a blocking call whose deadline passed is replaced).
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -361,6 +362,7 @@ class ListenerActor(
     case ReceiveTimedOut(_) =>
     case ReconnectNow(_) =>
     case ConnectNow =>
+    case DeadlinePassed(_) =>
     case IdleTick(_) =>
     case PingTimedOut(_, _) =>
   }
@@ -451,6 +453,24 @@ class ListenerActor(
 
   private def scheduleIdleTick(): Unit = idlePingIntervalOpt.foreach { interval =>
     context.system.scheduler.scheduleOnce(interval, self, IdleTick(connectionNumber))
+  }
+
+  /** True while `request` itself was sent on the current connection and is not answered */
+  private def isSent(request: Request[_]): Boolean = {
+    val it = requests.iterator()
+    var found = false
+    while (!found && it.hasNext) found = it.next() eq request
+    found
+  }
+
+  /**
+   * The deadline of a blocking call passed: when it was written on the current connection and is not answered, the
+   * connection is closed (it may still be blocked in Redis) and a new one is made; its late reply reaches nobody.
+   */
+  private def deadlines: Receive = {
+    case DeadlinePassed(request) if isSent(request) =>
+      log.debug(s"No reply to the blocking call $request within its deadline; replacing the connection to $remote")
+      closeConnection("the deadline of a blocking call passed")
   }
 
   /** In the initialized state: the idle check and the timeout of a PING */
@@ -596,7 +616,7 @@ class ListenerActor(
       connectionEnded(s"Could not connect to $remote")
   }
   
-  def initializing: Receive = queue orElse {
+  def initializing: Receive = queue orElse deadlines orElse {
     case Tcp.Received(data) if isCurrent(sender()) =>
       val responsesCount = receiveData(data)
       initializationRequestsCount -= responsesCount
@@ -618,7 +638,7 @@ class ListenerActor(
       connectionEnded(s"Could not initialize connection to $remote")
   }
   
-  def initialized: Receive = sendReceive orElse healthChecks orElse {
+  def initialized: Receive = sendReceive orElse healthChecks orElse deadlines orElse {
     case Tcp.Received(data) if isCurrent(sender()) => receiveData(data)
     case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
     case Terminated(ref) if isIOActor(ref) =>
@@ -679,4 +699,10 @@ object ListenerActor {
    * before 1.1.0.
    */
   private[scredis] case object ConnectNow
+  /**
+   * The deadline of the blocking call `request` passed: when it was written on the current connection and is not
+   * answered, the connection is replaced. Ignored otherwise. Sent by the blocking connections (not by the deprecated
+   * `Redis.blocking`, which keeps its connection as before 1.1.0).
+   */
+  private[scredis] final case class DeadlinePassed(request: Request[_])
 }

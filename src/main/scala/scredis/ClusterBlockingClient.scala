@@ -43,7 +43,8 @@ import scala.util.{Failure, Try}
  *    outcome unknown ([[scredis.exceptions.RedisOutcomeUnknownException]], the `TimeoutException` as the cause for
  *    the deadline) with the availability of the key's slot, and is **not** sent again: Redis may have executed it
  *    (an element popped on a master that died before its reply arrived is lost with that reply). After a deadline,
- *    the node's blocking connection, which may still be blocked in Redis, is closed and replaced for the next call.
+ *    the connection of the node's blocking client, which may still be blocked in Redis, is closed and replaced for
+ *    the next call, by the same rule as `Redis.blockingClient`: a late reply reaches nobody.
  *  - Every other reply, `ASK` and errors such as `CROSSSLOT` or `WRONGTYPE` included, is the call's result.
  *
  * `withRetry` waits on the availability of a failed call and makes it again (by default only when it was not sent).
@@ -79,13 +80,6 @@ final class ClusterBlockingClient private[scredis] (
       clients += server -> client
       client
     })
-  }
-
-  private def discard(server: Server): Unit = synchronized {
-    clients.get(server).foreach { client =>
-      clients -= server
-      client.closeAsync()
-    }
   }
 
   /** The cluster's connection to `server`, or this client's blocking connection to it, waits for its next attempt */
@@ -193,8 +187,7 @@ final class ClusterBlockingClient private[scredis] (
               // written, its reply lost: not sent again (Redis may have executed it)
               val (cause, availability) = err.getCause match {
                 case deadlinePassed: TimeoutException =>
-                  // the connection may still be blocked in Redis
-                  discard(server)
+                  // the node's blocking client has replaced its connection (as Redis.blockingClient does)
                   (deadlinePassed, cluster.health.slotAvailability(slot))
                 case _ => (err, availabilityAfterLoss(server, slot))
               }

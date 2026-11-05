@@ -1,6 +1,6 @@
 // Modified by Sopranoworks: credentials kept only once accepted; closeAsync; health; a call refused while another one blocks fails as
-// not sent (with an availability that completes when that call ends), a call whose deadline passes as outcome unknown, a call
-// made after QUIT as not sent.
+// not sent (with an availability that completes when that call ends), a call whose deadline passes as outcome unknown (and its
+// connection replaced), a call made after QUIT as not sent.
 package scredis.io
 
 import java.time.Instant
@@ -99,6 +99,9 @@ abstract class AkkaBlockingConnection(
   /** False: a call made after the connection was closed goes to the stopped connection (as before 1.1.0) */
   protected def refusesAfterClose: Boolean = true
 
+  /** False: the connection is kept after a call whose deadline passed (as before 1.1.0) */
+  protected def discardsOnDeadline: Boolean = true
+
   override protected[scredis] def sendBlocking[A](request: Request[A])(
     implicit timeout: Duration
   ): Try[A] = withLock {
@@ -111,11 +114,12 @@ abstract class AkkaBlockingConnection(
     updateState(request)
     val future = keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))
     // the deadline of a blocking call passing: it was written, and its reply has not come (the connection may still
-    // be blocked in Redis)
+    // be blocked in Redis). The connection is closed and replaced, so that a late reply reaches nobody and the next
+    // call does not wait behind this one.
     Try(Await.result(future, timeout)).recoverWith {
-      case e: TimeoutException => Failure(new RedisOutcomeUnknownException(
-        s"No reply to $request within $timeout", health.availability, e
-      ))
+      case e: TimeoutException =>
+        if (discardsOnDeadline) listenerActor ! ListenerActor.DeadlinePassed(request)
+        Failure(new RedisOutcomeUnknownException(s"No reply to $request within $timeout", health.availability, e))
     }
   }
 
