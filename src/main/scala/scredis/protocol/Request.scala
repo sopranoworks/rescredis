@@ -1,7 +1,9 @@
-// Modified by Sopranoworks: copyForResend (a request object is sent on one connection only).
+// Modified by Sopranoworks: copyForResend (a request object is sent on one connection only); a permit of max-concurrent-requests is
+// released exactly once, by the request that holds it.
 package scredis.protocol
 
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 
 import scredis.exceptions._
 import scredis.serialization.UTF8StringReader
@@ -21,8 +23,16 @@ abstract class Request[A](command: Command, args: Any*) {
   private var promise = Promise[A]()
   private var _buffer: ByteBuffer = null
   private var _bytes: Array[Byte] = null
+  // A permit of `max-concurrent-requests` that this request holds (Protocol.send acquired it for it); released once,
+  // when the request is completed. Requests that the library sends itself (AUTH / SELECT / CLIENT SETNAME on connect,
+  // the idle PING, the MULTI of a transaction, a subscriber's requests) and the copies made for a resend hold none.
+  private val permit = new AtomicBoolean(false)
   def future: Future[A] = promise.future
   val repliesCount = 1
+
+  private[scredis] def holdPermit(): Unit = permit.set(true)
+
+  private def releasePermit(): Unit = if (permit.compareAndSet(true, false)) Protocol.release()
 
   /**
    * A new request with the same command and arguments that decodes its reply in the same way, for sending this
@@ -82,7 +92,7 @@ abstract class Request[A](command: Command, args: Any*) {
     } catch {
       case e: IllegalStateException =>
     } finally {
-      Protocol.release()
+      releasePermit()
     }
   }
   
@@ -92,7 +102,7 @@ abstract class Request[A](command: Command, args: Any*) {
     } catch {
       case e: IllegalStateException =>
     } finally {
-      Protocol.release()
+      releasePermit()
     }
   }
   

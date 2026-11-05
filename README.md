@@ -42,11 +42,19 @@ Changes:
   on `Client`, `Redis`, their blocking and subscriber clients, and `RedisCluster` (see "Connections").
   Reconnecting with a backoff, logged once per change. `WAIT`; on `RedisCluster`: `wait(key, ...)`,
   `SCRIPT LOAD` / `EXISTS` / `FLUSH` sent to every master, and a blocking client (`RedisCluster.blocking`).
+  Connection health (state, subscription, idle `PING`) and availability objects to wait on; connection errors
+  classified as `RedisNotSentException` and `RedisOutcomeUnknownException` (both `RedisIOException`s; see
+  "Connections"); a blocking call whose deadline passes fails with `RedisOutcomeUnknownException` (was a
+  `TimeoutException`). On `RedisCluster`: node health and slot reachability, the slots read again when a node's
+  connection changes state; a request to a master known to be down fails at once as not sent, and only requests
+  that were not sent are sent again. Fix: a permit of `max-concurrent-requests` is given back exactly once per
+  request (some were given back without having been taken, so the limit grew).
 
 ## Features
 * Supports all Redis commands up to v3.0.0
 * Built on top of Akka (rescredis) or Apache Pekko (rescredis-pekko) non-blocking IO
 * Automatic reconnection, with a backoff
+* Connection health, availability events, connection errors classified (not sent / outcome unknown)
 * Automatic pipelining
 * Transactions
 * Pub/Sub
@@ -103,11 +111,11 @@ The configuration keys differ per artifact:
 
 **Replies.** A connection pairs the n-th reply with the n-th request it sent. When a connection dies (the server
 crashed or restarted, the connection was reset, a master failed over), every request sent on it that has no reply
-yet fails with a `RedisIOException`; requests waiting to be sent go out on the new connection. A reply completes
+yet fails with a `RedisOutcomeUnknownException`; requests waiting to be sent go out on the new connection. A reply completes
 only the request it belongs to: a request gets its own reply or fails, never another request's. (scredis, and
 rescredis up to 1.0.0, could complete a request with the reply of another one after a connection died, or leave
 a request without an answer; see the 1.1.0 change above.) A request sent again by `RedisCluster` after `MOVED`,
-`ASK`, `TRYAGAIN`, `CLUSTERDOWN` or a connection error is the same command, as a new request object.
+`ASK`, `TRYAGAIN`, `CLUSTERDOWN` or because it was not sent is the same command, as a new request object.
 
 **Reconnecting.** After the loss of a connection on which Redis had answered, the first attempt is made at once.
 After an attempt that fails (no connection, or a connection closed before Redis answered on it, as through a
@@ -123,8 +131,8 @@ scredis.io.reconnect {
 
 These two are read from the application's configuration for every client (as `max-cluster-hash-misses`).
 Requests sent while an attempt is in progress wait for it and fail if it fails; requests sent while the client
-waits for its next attempt fail at once with a `RedisIOException` (so `RedisCluster` sends them to another node),
-as do all requests with `fail-command-on-connecting = true`. The connection logs the loss once (warning, with the
+waits for its next attempt fail at once with a `RedisNotSentException`, as do all requests with
+`fail-command-on-connecting = true`. The connection logs the loss once (warning, with the
 cause) and its return once (info, with the number of attempts and the time); single attempts are logged at debug
 level, without stack traces. The receive timeout (`scredis.io.receive-timeout`) covers every request waiting for
 its reply. A `RedisCluster` keeps a node's connection after errors; it reconnects with the backoff.
@@ -134,6 +142,59 @@ its reply. A `RedisCluster` keeps a node's connection after errors; it reconnect
 the writes). Redis applies it to the connection it is sent on: the writes sent before it on the same connection.
 While it blocks, the commands sent after it on that connection wait behind it, and the receive timeout applies to
 it. On a replica Redis answers an error. For `RedisCluster` see "Cluster".
+
+**Health.** Every connection (`Client`, `Redis`, their `blocking` and `subscriber` clients, each node's connection
+of `RedisCluster`, the connections of `RedisCluster.blocking`) has a `health`: its `state`, one of
+`ConnectionState.Connected` (connected and initialised: `AUTH`, `SELECT` and `CLIENT SETNAME`, as configured, have
+been answered; without them, a `PING`), `Reconnecting(attempt, since, lastCause)` (the first connection is
+attempt 1 with the cause "not connected yet") and `Closed` (after `QUIT`). `health.subscribe(listener)` calls the
+listener with the current state, then with every change, in order, on a thread of rescredis (it must not block),
+and returns a `HealthSubscription` to `cancel()`; a function rather than an actor event stream, so that it is the
+same on both artifacts and needs no actor. While nothing is outstanding on a connection and nothing has been sent
+or received for `idle-ping-interval`, the client sends a `PING` of its own on it (also on a subscribed connection),
+so that a connection that died without being closed is found without waiting for the next request: when its reply
+has not come within `idle-ping-timeout`, the connection is closed and made again. The `PING` and its reply never
+reach a caller.
+
+```
+scredis.io.health {
+  idle-ping-interval = 1 second    # default; 0 = no idle PING
+  idle-ping-timeout = 2 seconds    # default
+}
+```
+
+**Availability.** `client.availability` (`health.availability`) is an `Availability`: `whenAvailable: Future[Unit]`
+is completed while the connection is connected and initialised, and otherwise completes when it is again;
+`unavailableSince` and `cause` say since when and why it is not. There is one object per outage, shared by
+everyone who asks and by the errors of that outage; the next outage has a new one, and rescredis keeps no
+reference to it once it is completed. When the client is closed (`quit()`), `whenAvailable` fails with a
+`RedisIOException`. On `RedisCluster`, `cluster.availability(key)` is that of the master of the key's slot and
+`cluster.availability` that of the whole cluster (see "Cluster").
+
+**Errors.** A request that fails because of its connection fails with one of two `RedisIOException`s, which say
+whether Redis may have executed it; both carry the `availability` of the connection (on `RedisCluster`, of the
+key's slot). What Redis answers with an error keeps its own types (`RedisErrorResponseException`,
+`RedisClusterErrorResponseException`, ...).
+
+| Class | When | Executed? |
+|---|---|---|
+| `RedisNotSentException` | no connection (an attempt failed, or the client waits for its next attempt); addressed to a node or a slot's master known to be down; `fail-command-on-connecting` while connecting; after `QUIT`; on `RedisCluster`, `CLUSTERDOWN` / `TRYAGAIN` after the retries; a blocking call made while another one blocks | certainly not: safe to send again |
+| `RedisOutcomeUnknownException` | written, and the connection was lost before the reply, or the reply did not come within the receive timeout, or a blocking call's deadline (block time + 2 s) passed | unknown: send again only if executing twice is harmless |
+
+rescredis sends again by itself only what was not sent (on `RedisCluster`, after `MOVED`, `ASK`, `TRYAGAIN`,
+`CLUSTERDOWN` and a not sent request); a request whose outcome is unknown goes back to the caller, so a write is
+never executed twice by the library. (The exception is `RedisCluster.blocking`, see "Cluster".) Waiting for the
+connection and sending again:
+
+```scala
+def setWithRetry(key: String, value: String): Future[Boolean] =
+  client.set(key, value).recoverWith {
+    case e: RedisNotSentException =>                // not executed: send it again once usable
+      e.availability.whenAvailable.flatMap(_ => client.set(key, value))
+    case e: RedisOutcomeUnknownException =>         // SET is idempotent: sending it again is harmless here
+      e.availability.whenAvailable.flatMap(_ => client.set(key, value))
+  }
+```
 
 ### Quick example
 ```scala
@@ -221,6 +282,35 @@ keyless commands do.
 cluster.set("{room:7}:state", bytes).flatMap(_ => cluster.wait("{room:7}:state", 1, 100.millis))  // Future[Long]
 ```
 
+**Health and partial failures.** `cluster.health` has the `health` of the connection to every node it knows
+(`nodes`), and slot reachability: a slot is reachable when the slot cache names a master for it and the connection
+to that master is connected (`isReachable(slot)`, `unreachableSlots`). `subscribe` calls a listener with every
+node's state changes. When a node's connection changes state, the client reads the slots again (`CLUSTER SLOTS`,
+after `refresh-debounce`), and while some slot is unreachable it reads them again every
+`unreachable-refresh-interval`, so that a replica promoted by a failover is found without waiting for a `MOVED`:
+
+```
+scredis.io.cluster {
+  refresh-debounce = 100 milliseconds              # default
+  unreachable-refresh-interval = 500 milliseconds  # default
+}
+```
+
+A request to a master known to be down (its connection waits for the next reconnect attempt) is not sent to it:
+it is sent once to a connected node instead, which answers `MOVED` without executing it; when that names the
+master that is down (the failure is not handled by the cluster yet), or the node answers `CLUSTERDOWN` or
+`TRYAGAIN`, the request fails at once with a `RedisNotSentException` carrying `cluster.availability(key)`, which
+completes when the slot has a reachable master again (after the promotion, once the client has read the slots).
+A request whose outcome is unknown is not sent again. With `cluster-require-full-coverage yes` the other masters
+answer `CLUSTERDOWN` between the failure being detected and the promotion; such requests are retried for up to
+`connect-timeout` and then fail as not sent; with `no` they are served.
+
+```scala
+cluster.set(key, value).recoverWith {
+  case e: RedisNotSentException => e.availability.whenAvailable.flatMap(_ => cluster.set(key, value))
+}
+```
+
 **Scripts.** `scriptLoad`, `scriptExists` and `scriptFlush` have no key; on `RedisCluster` they are sent to every
 master (read from the cluster with `CLUSTER SLOTS` first), which is the routing a keyless script command needs on a
 cluster (the command is not changed). `scriptLoad` returns the SHA1 once every master has answered it (it is the
@@ -237,9 +327,12 @@ one call is made at a time, as on `Redis.blocking`. Keys in different slots are 
 `CROSSSLOT`). When the slot's master changes: a `MOVED` reply updates the slot cache and the call goes to the named
 node at once; on `CLUSTERDOWN`, `TRYAGAIN` or a failed connection the call waits (the reconnect backoff), reads the
 slots again and goes to the slot's master. Retries are made within the call's own timeout (the block time + 2 s,
-none for 0); the command is sent unchanged. When the timeout has passed the call fails with a `TimeoutException`
-and that node's blocking connection is replaced. A call whose node died after executing it is sent again: an
-element popped on the dead master is not returned.
+none for 0); the command is sent unchanged. When the timeout has passed, that node's blocking connection is
+replaced and the call fails with a `RedisOutcomeUnknownException` if its last attempt was written, else with a
+`RedisNotSentException`, both carrying `cluster.availability(key)`. Unlike the cluster's other commands, a
+blocking call waits within its timeout for the slot's master and is sent again after a lost connection (outcome
+unknown): a call whose node died after executing it is sent again, and an element popped on the dead master is
+not returned. `cluster.blocking.health` has the health of its connection to each node.
 
 ```scala
 cluster.blocking.blPop[String](5, "jobs")   // Try[Option[(String, String)]]

@@ -1,10 +1,12 @@
-// Modified by Sopranoworks: adapted to Redis 7.4 (auth); credentials kept only once accepted, clearCredentials.
+// Modified by Sopranoworks: adapted to Redis 7.4 (auth); credentials kept only once accepted, clearCredentials; health and availability.
 package scredis.io
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 import akka.actor._
 import com.typesafe.scalalogging.LazyLogging
+import scredis.{Availability, ConnectionHealth, Server}
+import scredis.exceptions.{RedisIOException, RedisNotSentException}
 import scredis.protocol.{AuthConfig, Request}
 import scredis.protocol.requests.ConnectionRequests.{Auth, Quit, Select}
 import scredis.protocol.requests.ServerRequests.{ClientSetName, Shutdown}
@@ -38,6 +40,27 @@ abstract class AbstractAkkaConnection(
   override implicit val dispatcher: ExecutionContext = system.dispatcher
   
   protected val listenerActor: ActorRef
+
+  /**
+   * The health of this connection: its state (connected, reconnecting, closed), which can be read and subscribed to,
+   * and its availability.
+   *
+   * @since 1.1.0
+   */
+  val health: ConnectionHealth = new ConnectionHealth(Server(host, port))
+
+  /**
+   * The availability of this connection (`health.availability`): `whenAvailable` is completed while it is connected
+   * and initialised, else completes when it is again.
+   *
+   * @since 1.1.0
+   */
+  def availability: Availability = health.availability
+
+  /** A request refused because this connection is being closed: not sent */
+  protected def closedNotSent(message: String): RedisNotSentException = new RedisNotSentException(
+    message, Availability.closed(RedisIOException(s"The connection to $host:$port has been closed"))
+  )
   
   protected def updateState(request: Request[_]): Unit = request match {
     case Select(db) =>

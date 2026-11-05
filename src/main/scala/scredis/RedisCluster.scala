@@ -1,5 +1,5 @@
 // Modified by Sopranoworks: JsonCommands mixed in; tcp buffer hints and decoder dispatcher path passed on; StreamCommands mixed in;
-// WAIT routed by a key, SCRIPT LOAD / EXISTS / FLUSH sent to every master, a blocking client.
+// WAIT routed by a key, SCRIPT LOAD / EXISTS / FLUSH sent to every master, a blocking client; availability of a key's slot and of the cluster.
 package scredis
 
 import akka.actor.ActorSystem
@@ -99,6 +99,24 @@ class RedisCluster private[scredis](
       failCommandOnConnecting = failCommandOnConnecting
     )(actorSystem))
   }
+
+  /**
+   * The availability of `key`: `whenAvailable` is completed while the master of the key's slot is reachable (the
+   * slot cache names it and the connection to it is connected), else completes when it is reachable again (the
+   * master's connection is back, or a refresh of the slots names a master that is connected, after a failover).
+   * One object per outage of the slot's master, shared by every caller (see [[scredis.Availability]]).
+   *
+   * @since 1.1.0
+   */
+  def availability(key: String): Availability = health.availability(key)
+
+  /**
+   * The availability of the whole cluster: `whenAvailable` is completed while every slot is reachable, else
+   * completes when every slot is reachable again.
+   *
+   * @since 1.1.0
+   */
+  def availability: Availability = health.availability
 
   /**
    * WAIT on the connection to the master of `key`'s slot: blocks until the writes sent before it on that

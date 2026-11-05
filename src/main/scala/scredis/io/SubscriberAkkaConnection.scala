@@ -1,4 +1,5 @@
-// Modified by Sopranoworks: quit() does not wait for an outstanding request; credentials kept only once accepted.
+// Modified by Sopranoworks: quit() does not wait for an outstanding request; credentials kept only once accepted; health; requests
+// refused after quit() fail as not sent.
 package scredis.io
 
 import java.util.concurrent.Semaphore
@@ -69,7 +70,8 @@ abstract class SubscriberAkkaConnection(
       tcpSendBufferSizeHint,
       tcpReceiveBufferSizeHint,
       akkaIODispatcherPath,
-      akkaDecoderDispatcherPath
+      akkaDecoderDispatcherPath,
+      health
     ).withDispatcher(akkaListenerDispatcherPath),
     UniqueNameGenerator.getUniqueName(s"${nameOpt.getOrElse(s"$host-$port")}-listener-actor")
   )
@@ -96,7 +98,7 @@ abstract class SubscriberAkkaConnection(
     lock.acquire()
     if (isShuttingDown) {
       lock.release()
-      Future.failed(RedisIOException("Connection has been closed"))
+      Future.failed(closedNotSent("Connection has been closed"))
     } else {
       listenerActor ! request
       request.future.onComplete(_ => lock.release())

@@ -1,6 +1,6 @@
 // Modified by Sopranoworks: every reply completes the pending request (status replies, errors, unmatched replies); QUIT fails what is outstanding;
 // the data of a connection is decoded in order by one decoder, results from an earlier connection are ignored, a partly answered request
-// fails when its connection is lost.
+// fails when its connection is lost; the connection's health; requests fail as not sent or as outcome unknown.
 package scredis.io
 
 import akka.util.ByteString
@@ -8,7 +8,7 @@ import scredis.exceptions._
 import scredis.protocol.{AuthConfig, Request, Response}
 import scredis.protocol.requests.ConnectionRequests.Quit
 import scredis.protocol.requests.PubSubRequests
-import scredis.{PubSubMessage, Subscription}
+import scredis.{Availability, ConnectionHealth, PubSubMessage, Subscription}
 
 import scala.collection.mutable.{HashSet => MHashSet}
 import scala.concurrent.duration._
@@ -27,7 +27,8 @@ class SubscriberListenerActor(
   tcpSendBufferSizeHint: Int,
   tcpReceiveBufferSizeHint: Int,
   akkaIODispatcherPath: String,
-  akkaDecoderDispatcherPath: String
+  akkaDecoderDispatcherPath: String,
+  health: ConnectionHealth
 ) extends ListenerActor(
   host = host,
   port = port,
@@ -42,7 +43,8 @@ class SubscriberListenerActor(
   tcpReceiveBufferSizeHint = tcpReceiveBufferSizeHint,
   akkaIODispatcherPath = akkaIODispatcherPath,
   akkaDecoderDispatcherPath = akkaDecoderDispatcherPath,
-  failCommandOnConnecting = false
+  failCommandOnConnecting = false,
+  health = health
 ) {
   
   import SubscriberListenerActor._
@@ -105,9 +107,11 @@ class SubscriberListenerActor(
   ): Unit = decoders.routees.head.send(DecoderActor.SubscribePartition(data, connectionNumber), self)
 
   override protected def onConnectionLost(): Unit = {
-    requestOpt.foreach(_.failure(RedisIOException("Connection has been shutdown abruptly")))
+    requestOpt.foreach(_.failure(outcomeUnknown("Connection has been shutdown abruptly")))
     clearPendingRequest()
   }
+
+  override protected def isIdle: Boolean = super.isIdle && requestOpt.isEmpty
 
   /** The request the next reply belongs to: the one that is partially answered, else the oldest one sent. */
   private def pendingRequest(): Option[Request[_]] = requestOpt match {
@@ -244,11 +248,12 @@ class SubscriberListenerActor(
       }
     case Shutdown(quit) =>
       isClosing = true
+      health.closed()
       // requests still outstanding when the connection is closed will never be answered
-      val closed = RedisIOException("Connection has been closed")
+      val closed = outcomeUnknown("Connection has been closed")
       requestOpt.foreach(_.failure(closed))
       failAllSentRequests(closed)
-      failAllQueuedRequests(closed)
+      failAllQueuedRequests(notSent("Connection has been closed"))
       onConnect()
       send(quit)
   }

@@ -1,4 +1,5 @@
-// Modified by Sopranoworks: Scala 3 compatibility; configuration key and normalisation per build variant; reconnect backoff.
+// Modified by Sopranoworks: Scala 3 compatibility; configuration key and normalisation per build variant; reconnect backoff; connection health
+// (idle PING) and the cluster's slot refreshes.
 package scredis
 
 import com.typesafe.config.{Config, ConfigFactory}
@@ -105,11 +106,24 @@ class RedisConfig(config: Config = ConfigFactory.load().getConfig("scredis")) {
       val MaxBackoff = parseFiniteDuration("max-backoff")
     }
 
+    object Health {
+      private implicit val config: Config = IO.config.getConfig("health")
+
+      /** None when 0 (off) */
+      val IdlePingIntervalOpt: Option[FiniteDuration] = {
+        val d = Duration.create(config.getString("idle-ping-interval"))
+        if (d.isFinite && d.toMillis > 0) Some(FiniteDuration(d.length, d.unit)) else None
+      }
+      val IdlePingTimeout = parseFiniteDuration("idle-ping-timeout")
+    }
+
     object Cluster {
       private implicit val config: Config = IO.config.getConfig("cluster")
 
       val TryAgainWait = parseFiniteDuration("try-again-wait")
       val ClusterDownWait = parseFiniteDuration("clusterdown-wait")
+      val RefreshDebounce = parseFiniteDuration("refresh-debounce")
+      val UnreachableRefreshInterval = parseFiniteDuration("unreachable-refresh-interval")
     }
   }
   

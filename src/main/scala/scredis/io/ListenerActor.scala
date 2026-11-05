@@ -1,6 +1,8 @@
 // Modified by Sopranoworks: fixes backported from upstream scredis (05592f8, 5debcf4); adapted to Redis 7.4 (auth); credentials kept only once accepted, clearCredentials;
 // every request is completed by this actor only, by its reply or by the end of the connection it was sent on (messages and data of an
-// earlier connection are ignored); reconnect with a backoff, state changes logged once; the receive timeout covers every outstanding request.
+// earlier connection are ignored); reconnect with a backoff, state changes logged once; the receive timeout covers every outstanding request;
+// the connection's health (state, availability), a PING to learn that Redis answers on a new connection without initialisation requests, an
+// idle PING; requests that fail because of the connection fail as not sent or as outcome unknown.
 package scredis.io
 
 import java.net.InetSocketAddress
@@ -10,9 +12,9 @@ import akka.actor._
 import akka.io.Tcp
 import akka.routing._
 import akka.util.ByteString
-import scredis.{RedisConfigDefaults, Subscription, Transaction}
-import scredis.exceptions.RedisIOException
-import scredis.protocol.requests.ConnectionRequests.{Auth, Quit, Select}
+import scredis.{Availability, ConnectionHealth, RedisConfigDefaults, Subscription, Transaction}
+import scredis.exceptions.{RedisIOException, RedisNotSentException, RedisOutcomeUnknownException}
+import scredis.protocol.requests.ConnectionRequests.{Auth, Ping, Quit, Select}
 import scredis.protocol.requests.ServerRequests
 import scredis.protocol.{AuthConfig, Protocol, Request}
 import scredis.util.UniqueNameGenerator
@@ -20,6 +22,7 @@ import scredis.util.UniqueNameGenerator
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
 import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 import scredis.Transaction._
 
 class ListenerActor(
@@ -36,7 +39,8 @@ class ListenerActor(
   tcpReceiveBufferSizeHint: Int,
   akkaIODispatcherPath: String,
   akkaDecoderDispatcherPath: String,
-  failCommandOnConnecting: Boolean
+  failCommandOnConnecting: Boolean,
+  health: ConnectionHealth
 ) extends Actor with ActorLogging {
   
   import ListenerActor._
@@ -53,7 +57,8 @@ class ListenerActor(
   private var isConnecting = false
   private var isShuttingDown = false
   private var isShuttingDownBeforeConnected = false
-  private var isReceiveTimeout = false
+  // why the current connection is being closed by this actor (a receive timeout, an unanswered PING)
+  private var closingCause: Option[String] = None
   private var timeoutCancellableOpt: Option[Cancellable] = None
   
   protected val queuedRequests = new util.LinkedList[Request[_]]()
@@ -82,6 +87,27 @@ class ListenerActor(
   private var down = false
   private var downSince = 0L
   private var attemptsWhileDown = 0
+
+  // Health: the attempt reported (from 1 in each outage; the first connection is attempt 1), the PING of the current
+  // connection that is not answered yet (the one that tells that Redis answers, or an idle one), and when something
+  // was last sent or received.
+  private var healthAttempt = 1
+  private var pingOpt: Option[Request[_]] = None
+  private var pingNumber = 0
+  private var lastActivity = System.nanoTime()
+  private val idlePingIntervalOpt = RedisConfigDefaults.IO.Health.IdlePingIntervalOpt
+  private val idlePingTimeout = RedisConfigDefaults.IO.Health.IdlePingTimeout
+
+  /** A request that fails before it was sent: certainly not executed */
+  protected def notSent(message: String): RedisNotSentException = new RedisNotSentException(message, health.availability)
+
+  /** A request that was written and whose reply will not come: the outcome is unknown */
+  protected def outcomeUnknown(message: String): RedisOutcomeUnknownException =
+    new RedisOutcomeUnknownException(message, health.availability)
+
+  /** A request that fails because the connection is being closed (QUIT): not sent */
+  private def closing(message: String): RedisNotSentException =
+    new RedisNotSentException(message, Availability.closed(RedisIOException(s"The connection to $remote has been closed")))
 
   protected val decodingSubscription: Option[Subscription] = None
 
@@ -133,6 +159,7 @@ class ListenerActor(
   }
   
   protected def doSend(request: Request[_]): Unit = {
+    lastActivity = System.nanoTime()
     armReceiveTimeout()
     requests.addLast(request)
     ioActor ! request
@@ -142,7 +169,7 @@ class ListenerActor(
     var isShuttingDown = false
     requests.foreach { request =>
       if (isShuttingDown) {
-        request.failure(RedisIOException("Shutting down"))
+        request.failure(closing("Shutting down"))
       } else {
         request match {
           case select @ Select(db) =>
@@ -158,6 +185,7 @@ class ListenerActor(
           case request @ (Quit() | ServerRequests.Shutdown(_)) =>
             isShuttingDown = true
             this.isShuttingDown = true
+            health.closed()
             doSend(request)
             become(shuttingDown)
             // FIXME shutdown request does not complete on success
@@ -201,6 +229,7 @@ class ListenerActor(
   
   protected def receiveData(data: ByteString): Int = {
     log.debug(s"Received data: ${data.decodeString("UTF-8").replace("\r\n", "\\r\\n")}")
+    lastActivity = System.nanoTime()
     
     if (!answered) {
       answered = true
@@ -253,13 +282,16 @@ class ListenerActor(
    * The connection of the current IOActor has ended (the actor has stopped): every request sent on it is failed,
    * and a new connection is made, at once if Redis had answered on this one, else after the backoff.
    */
-  protected def connectionEnded(sentFailure: Throwable): Unit = {
+  protected def connectionEnded(sentMessage: String): Unit = {
     cancelReceiveTimeout()
     remainingByteStringOpt = None
     tcpConnection = null
-    failAllSentRequests(sentFailure)
-    onConnectionLost()
+    pingOpt = None
     if (answered) failedAttempts = 0 else failedAttempts += 1
+    // the health first: the requests failed below carry the availability of this outage
+    health.reconnecting(healthAttempt + 1, lastCause, waiting = failedAttempts > 0)
+    failAllSentRequests(outcomeUnknown(sentMessage))
+    onConnectionLost()
     if (!down) {
       down = true
       downSince = System.nanoTime()
@@ -305,6 +337,8 @@ class ListenerActor(
   }
   
   protected def always: Receive = {
+    case ProbeAnswered(number) =>
+      if (number == connectionNumber) connectedAndInitialized()
     case CredentialsAccepted(credentials) =>
       authOpt = Some(credentials)
     case ClearCredentials =>
@@ -318,19 +352,22 @@ class ListenerActor(
     case ConnectFailed(cause) =>
       if (isIOActor(sender())) lastCause = cause
     case closed: Tcp.ConnectionClosed =>
-      if (isCurrent(sender())) lastCause = describe(closed)
+      // not when this actor closed it (receive timeout, unanswered PING): that is the cause
+      if (isCurrent(sender()) && closingCause.isEmpty) lastCause = describe(closed)
     // from an earlier connection (its data, its IOActor, its timers), or a decoder that stopped
     case Tcp.Received(_) =>
     case Abort | Shutdown =>
     case Terminated(_) =>
     case ReceiveTimedOut(_) =>
     case ReconnectNow(_) =>
+    case IdleTick(_) =>
+    case PingTimedOut(_, _) =>
   }
   
   protected def fail: Receive = {
-    case request: Request[_] => request.failure(RedisIOException("Shutting down"))
+    case request: Request[_] => request.failure(closing("Shutting down"))
     case transaction: Transaction => transaction.execRequest.failure(
-      RedisIOException("Shutting down")
+      closing("Shutting down")
     )
   }
   
@@ -359,21 +396,74 @@ class ListenerActor(
     reconnectCancellableOpt.foreach(_.cancel())
     reconnectCancellableOpt = None
     if (down) attemptsWhileDown += 1
+    healthAttempt += 1
+    health.reconnecting(healthAttempt, lastFailure, waiting = false)
     ioActor = createIOActor()
     context.watch(ioActor)
     isConnecting = true
-    isReceiveTimeout = false
+    closingCause = None
     become(connecting)
   }
   
   protected def handleReceiveTimeout(): Unit = {
     log.error("Receive timeout")
-    isReceiveTimeout = true
-    lastCause = "receive timeout"
+    closeConnection("receive timeout")
+  }
+
+  /** Redis has answered the initialisation of the current connection (or the PING made instead) */
+  private def connectedAndInitialized(): Unit = {
+    healthAttempt = 0
+    health.connected()
+  }
+
+  /** Closes the current connection because of `cause`; what was sent on it fails (outcome unknown) */
+  private def closeConnection(cause: String): Unit = {
+    closingCause = Some(cause)
+    lastCause = cause
     remainingByteStringOpt = None
-    timeoutCancellableOpt = None
+    cancelReceiveTimeout()
     ioActor ! IOActor.Shutdown
     become(reconnecting)
+  }
+
+  /** True when nothing is outstanding on the connection (a subscriber adds its partly answered request) */
+  protected def isIdle: Boolean = requests.isEmpty && queuedRequests.isEmpty
+
+  /** Sends a PING of this actor's own: its reply goes to nobody else; unanswered within the timeout, the connection is closed */
+  private def sendPing(): Request[_] = {
+    val ping = Ping()
+    pingNumber += 1
+    pingOpt = Some(ping)
+    send(ping)
+    context.system.scheduler.scheduleOnce(idlePingTimeout, self, PingTimedOut(connectionNumber, pingNumber))
+    ping
+  }
+
+  /** Redis answers on the new connection (no initialisation request to tell it): a PING, then the connection is up */
+  private def probe(): Unit = {
+    val number = connectionNumber
+    sendPing().future.onComplete {
+      case Failure(_: RedisIOException) =>
+      case _ => self ! ProbeAnswered(number)
+    }
+  }
+
+  private def scheduleIdleTick(): Unit = idlePingIntervalOpt.foreach { interval =>
+    context.system.scheduler.scheduleOnce(interval, self, IdleTick(connectionNumber))
+  }
+
+  /** In the initialized state: the idle check and the timeout of a PING */
+  private def healthChecks: Receive = {
+    case IdleTick(number) if number == connectionNumber =>
+      idlePingIntervalOpt.foreach { interval =>
+        val unansweredPing = pingOpt.exists(!_.future.isCompleted)
+        if (!unansweredPing && isIdle && System.nanoTime() - lastActivity >= interval.toNanos) sendPing()
+      }
+      scheduleIdleTick()
+    case PingTimedOut(number, ping) if number == connectionNumber && ping == pingNumber &&
+      pingOpt.exists(!_.future.isCompleted) =>
+      log.warning(s"No reply to PING from $remote within $idlePingTimeout; closing the connection")
+      closeConnection(s"no reply to PING within $idlePingTimeout")
   }
   
   protected def onConnect(): Unit = ()
@@ -402,20 +492,21 @@ class ListenerActor(
   def connecting: Receive = {
     case request: Quit =>
       request.success(())
-      failAllQueuedRequests(RedisIOException("Connection has been shutdown by QUIT command"))
+      health.closed()
+      failAllQueuedRequests(closing("Connection has been shutdown by QUIT command"))
       isShuttingDownBeforeConnected = true
       shutdown()
     case request: Request[_] =>
       if(failCommandOnConnecting) {
-        request.failure(RedisIOException("Trying to connect..."))
+        request.failure(notSent("Trying to connect..."))
       } else if (!isConnecting) {
-        request.failure(RedisIOException(s"No connection to $remote ($lastFailure); reconnecting"))
+        request.failure(notSent(s"No connection to $remote ($lastFailure); reconnecting"))
       } else {
         queuedRequests.addLast(request)
       }
     case t @ Transaction(requests) =>
       if (!isConnecting && !failCommandOnConnecting) {
-        t.execRequest.failure(RedisIOException(s"No connection to $remote ($lastFailure); reconnecting"))
+        t.execRequest.failure(notSent(s"No connection to $remote ($lastFailure); reconnecting"))
       } else {
         queuedRequests.addLast(MultiRequest)
         requests.foreach { request =>
@@ -469,11 +560,13 @@ class ListenerActor(
           send(requests: _*)
           become(initializing)
         } else {
+          probe()
           onInitialized()
           sendAllQueuedRequests()
           if (isShuttingDown) {
             become(shuttingDown)
           } else {
+            scheduleIdleTick()
             become(initialized)
           }
         }
@@ -494,8 +587,10 @@ class ListenerActor(
       }
     case Terminated(ref) if isIOActor(ref) =>
       isConnecting = false
-      failAllQueuedRequests(RedisIOException(s"Could not connect to $remote"))
-      connectionEnded(RedisIOException(s"Could not connect to $remote"))
+      // the health first: the queued requests carry the availability of this outage
+      health.reconnecting(healthAttempt, lastCause, waiting = false)
+      failAllQueuedRequests(notSent(s"Could not connect to $remote ($lastCause)"))
+      connectionEnded(s"Could not connect to $remote")
   }
   
   def initializing: Receive = queue orElse {
@@ -503,33 +598,36 @@ class ListenerActor(
       val responsesCount = receiveData(data)
       initializationRequestsCount -= responsesCount
       if (initializationRequestsCount == 0) {
+        connectedAndInitialized()
         onInitialized()
         sendAllQueuedRequests()
         if (isShuttingDown) {
           become(shuttingDown)
         } else {
+          scheduleIdleTick()
           become(initialized)
         }
       }
     case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
     case Terminated(ref) if isIOActor(ref) =>
-      failAllQueuedRequests(RedisIOException(s"Could not initialize connection to $remote"))
-      connectionEnded(RedisIOException(s"Could not initialize connection to $remote"))
+      health.reconnecting(healthAttempt, lastCause, waiting = false)
+      failAllQueuedRequests(notSent(s"Could not initialize connection to $remote"))
+      connectionEnded(s"Could not initialize connection to $remote")
   }
   
-  def initialized: Receive = sendReceive orElse {
+  def initialized: Receive = sendReceive orElse healthChecks orElse {
     case Tcp.Received(data) if isCurrent(sender()) => receiveData(data)
     case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
     case Terminated(ref) if isIOActor(ref) =>
-      connectionEnded(RedisIOException("Connection has been shutdown abruptly"))
+      connectionEnded("Connection has been shutdown abruptly")
   }
   
   def reconnecting: Receive = queue orElse {
     case Terminated(ref) if isIOActor(ref) =>
-      if (isReceiveTimeout) {
-        connectionEnded(RedisIOException("Receive timeout"))
-      } else {
-        connectionEnded(RedisIOException("Connection has been shutdown abruptly"))
+      closingCause match {
+        case Some("receive timeout") => connectionEnded("Receive timeout")
+        case Some(cause) => connectionEnded(s"Connection closed: $cause")
+        case None => connectionEnded("Connection has been shutdown abruptly")
       }
   }
   
@@ -539,10 +637,12 @@ class ListenerActor(
     case Shutdown if isIOActor(sender()) => ioActor ! IOActor.ShutdownAck
     case Terminated(ref) if isIOActor(ref) =>
       // what was sent and not answered before the connection closed will not be answered
-      failAllSentRequests(RedisIOException("Connection has been shutdown"))
+      failAllSentRequests(outcomeUnknown("Connection has been shutdown"))
       shutdown()
   }
   
+  override def postStop(): Unit = health.closed()
+
   def awaitingDecodersShutdown: Receive = fail orElse {
     case Terminated(ref) if !isIOActor(ref) =>
       decodersCount -= 1
@@ -563,6 +663,9 @@ object ListenerActor {
   case object Shutdown
   private case class ReceiveTimedOut(connectionNumber: Int)
   private case class ReconnectNow(connectionNumber: Int)
+  private case class IdleTick(connectionNumber: Int)
+  private case class PingTimedOut(connectionNumber: Int, ping: Int)
+  private case class ProbeAnswered(connectionNumber: Int)
   /** The server accepted an `AUTH` with these credentials. */
   case class CredentialsAccepted(credentials: AuthConfig)
   /** Do not send `AUTH` on later reconnects. */

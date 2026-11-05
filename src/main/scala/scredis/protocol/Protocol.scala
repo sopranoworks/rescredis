@@ -1,3 +1,5 @@
+// Modified by Sopranoworks: a permit of max-concurrent-requests is held by the request it was acquired for (released once, see Request);
+// the reply to PING on a subscribed connection.
 package scredis.protocol
 
 import java.nio.{Buffer, ByteBuffer}
@@ -326,6 +328,8 @@ object Protocol extends LazyLogging {
   ): Either[ErrorResponse, Either[SimpleStringResponse, PubSubMessage]] = response match {
     case e: ErrorResponse => Left(e)
     case s: SimpleStringResponse => Right(Left(s))
+    // the reply to PING on a subscribed connection (`*2 $4 pong $0 ""`): the PING's own reply, as +PONG elsewhere
+    case a: ArrayResponse if isSubscribedPong(a) => Right(Left(SimpleStringResponse("PONG")))
     case a: ArrayResponse => Right(Right {
       val vector = a.parsed[Any, Vector] {
         case BulkStringResponse(valueOpt) => valueOpt
@@ -365,16 +369,33 @@ object Protocol extends LazyLogging {
     case x => throw RedisProtocolException(s"Invalid PubSubResponse received: $x")
   }
   
+  /** True for the reply to PING on a subscribed connection, whose elements are then consumed */
+  private def isSubscribedPong(a: ArrayResponse): Boolean = {
+    val pong = a.length == 2 && a.headOpt[Option[String]] {
+      case BulkStringResponse(valueOpt) => valueOpt.map(UTF8StringReader.read)
+      case _ => None
+    }.contains(Some("pong"))
+    if (pong) a.skip(a.length)
+    pong
+  }
+
   private[scredis] def send[A](request: Request[A], listenerActor: ActorRef): Future[A] = {
     acquire()
+    request.holdPermit()
     listenerActor ! request
     request.future
   }
   
   private[scredis] def send[A](transaction: Transaction, listenerActor: ActorRef): Future[Vector[Try[Any]]] = {
     acquire(1 + transaction.requests.size)
+    // one permit each for EXEC and the transaction's requests (MULTI, one object shared by every transaction, holds none)
+    transaction.execRequest.holdPermit()
+    transaction.requests.foreach(_.holdPermit())
     listenerActor ! transaction
     transaction.execRequest.future
   }
+
+  /** The permits of `max-concurrent-requests` that are free now (None without a limit) */
+  private[scredis] def availablePermits: Option[Int] = semaphoreAccessOption.map(_.semaphore.availablePermits())
   
 }

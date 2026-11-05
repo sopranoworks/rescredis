@@ -1,4 +1,4 @@
-// Modified by Sopranoworks: credentials kept only once accepted.
+// Modified by Sopranoworks: credentials kept only once accepted; health; requests refused after QUIT fail as not sent.
 package scredis.io
 
 import akka.actor._
@@ -65,14 +65,15 @@ abstract class AkkaNonBlockingConnection(
       tcpReceiveBufferSizeHint,
       akkaIODispatcherPath,
       akkaDecoderDispatcherPath,
-      failCommandOnConnecting
+      failCommandOnConnecting,
+      health
     ).withDispatcher(akkaListenerDispatcherPath),
     UniqueNameGenerator.getUniqueName(s"${nameOpt.getOrElse(s"$host-$port")}-listener-actor")
   )
   
   override protected[scredis] def send[A](request: Request[A]): Future[A] = {
     if (isShuttingDown) {
-      Future.failed(RedisIOException("Connection has been shutdown"))
+      Future.failed(closedNotSent("Connection has been shutdown"))
     } else {
       logger.debug(s"Sending request: $request")
       updateState(request)
@@ -82,7 +83,7 @@ abstract class AkkaNonBlockingConnection(
   
   override protected[scredis] def send(transaction: Transaction): Future[Vector[Try[Any]]] = {
     if (isShuttingDown) {
-      Future.failed(RedisIOException("Connection has been shutdown"))
+      Future.failed(closedNotSent("Connection has been shutdown"))
     } else {
       logger.debug(s"Sending transaction: $transaction")
       transaction.requests.foreach(updateState)

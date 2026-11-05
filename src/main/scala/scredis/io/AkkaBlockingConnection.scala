@@ -1,6 +1,8 @@
-// Modified by Sopranoworks: credentials kept only once accepted; closeAsync.
+// Modified by Sopranoworks: credentials kept only once accepted; closeAsync; health; a call refused while another one blocks fails as
+// not sent, a call whose deadline passes as outcome unknown.
 package scredis.io
 
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.locks.ReentrantLock
 
 import akka.actor._
@@ -11,7 +13,7 @@ import scredis.util.UniqueNameGenerator
 
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
-import scala.util.Try
+import scala.util.{Failure, Try}
 
 /**
  * This trait represents a blocking connection to a `Redis` server.
@@ -68,7 +70,8 @@ abstract class AkkaBlockingConnection(
       tcpReceiveBufferSizeHint,
       akkaIODispatcherPath,
       akkaDecoderDispatcherPath,
-      failCommandOnConnecting
+      failCommandOnConnecting,
+      health
     ).withDispatcher(akkaListenerDispatcherPath),
     UniqueNameGenerator.getUniqueName(s"${nameOpt.getOrElse(s"$host-$port")}-listener-actor")
   )
@@ -81,7 +84,7 @@ abstract class AkkaBlockingConnection(
         lock.unlock()
       }
     } else {
-      throw RedisIOException("Trying to send request on a blocked connection")
+      throw new RedisNotSentException("Trying to send request on a blocked connection", health.availability)
     }
   }
   
@@ -91,7 +94,13 @@ abstract class AkkaBlockingConnection(
     logger.debug(s"Sending blocking request: $request")
     updateState(request)
     val future = keepCredentialsOnceAccepted(request, Protocol.send(request, listenerActor))
-    Try(Await.result(future, timeout))
+    // the deadline of a blocking call passing: it was written, and its reply has not come (the connection may still
+    // be blocked in Redis)
+    Try(Await.result(future, timeout)).recoverWith {
+      case e: TimeoutException => Failure(new RedisOutcomeUnknownException(
+        s"No reply to $request within $timeout", health.availability, e
+      ))
+    }
   }
 
   /**

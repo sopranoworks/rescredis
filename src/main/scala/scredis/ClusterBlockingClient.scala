@@ -2,12 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 package scredis
 
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.locks.ReentrantLock
 
 import com.typesafe.scalalogging.LazyLogging
 import scredis.commands.{BlockingListCommands, BlockingStreamCommands}
-import scredis.exceptions.{RedisClusterErrorResponseException, RedisInvalidArgumentException, RedisIOException}
+import scredis.exceptions.{RedisClusterErrorResponseException, RedisInvalidArgumentException, RedisIOException, RedisNotSentException, RedisOutcomeUnknownException}
 import scredis.io.{BlockingConnection, ClusterConnection}
 import scredis.protocol.requests.ListRequests.BRPopLPush
 import scredis.protocol.{ClusterCRC16, ClusterDown, Key, Moved, Request, TryAgain}
@@ -34,14 +33,17 @@ import scala.util.{Failure, Try}
  *    wait (`scredis.io.reconnect`: min-backoff, doubling up to max-backoff) the slots are read from the cluster
  *    again (`CLUSTER SLOTS`) and the call is sent to the slot's master.
  *  - The command is sent again unchanged (block time included), as a new request; each attempt waits at most for
- *    what is left of the deadline. When the deadline has passed, the call fails with a
- *    `java.util.concurrent.TimeoutException`, and the node's blocking connection, which may still be blocked in
- *    Redis, is closed and replaced by a new one for the next call.
+ *    what is left of the deadline. When the deadline has passed, the node's blocking connection, which may still be
+ *    blocked in Redis, is closed and replaced by a new one for the next call, and the call fails with a
+ *    [[scredis.exceptions.RedisOutcomeUnknownException]] when its last attempt was written (its reply did not come
+ *    in time, or the connection was lost before it), or a [[scredis.exceptions.RedisNotSentException]] when it was
+ *    not (no master for the slot, CLUSTERDOWN / TRYAGAIN, no connection); both carry the availability of the key.
  *  - Every other reply, `ASK` and errors such as `CROSSSLOT` or `WRONGTYPE` included, is the call's result.
  *
- * A call whose connection failed after Redis had executed it (the node died before its reply arrived) is sent
- * again: an element that the first `BLPOP` / `BRPOP` / `BRPOPLPUSH` had popped on the dead master is not returned.
- * A reply is only ever the reply of its own request.
+ * Unlike the cluster's non-blocking commands, a blocking call waits within its deadline for the slot's master and
+ * is sent again after a lost connection (outcome unknown): a call whose connection failed after Redis had executed
+ * it (the node died before its reply arrived) is sent again, and an element that the first `BLPOP` / `BRPOP` /
+ * `BRPOPLPUSH` had popped on the dead master is not returned. A reply is only ever the reply of its own request.
  *
  * @since 1.1.0
  */
@@ -101,8 +103,8 @@ final class ClusterBlockingClient private[scredis] (
   }
 
   override protected[scredis] def sendBlocking[A](request: Request[A])(implicit timeout: Duration): Try[A] = {
-    if (closed) throw RedisIOException("Connection has been shutdown")
-    if (!lock.tryLock()) throw RedisIOException("Trying to send request on a blocked connection")
+    if (closed) throw new RedisNotSentException("Connection has been shutdown", cluster.health.availability)
+    if (!lock.tryLock()) throw new RedisNotSentException("Trying to send request on a blocked connection", Availability.Available)
     try {
       val slot = ClusterCRC16.getSlot(keyOf(request))
       val deadline = timeout match {
@@ -117,7 +119,9 @@ final class ClusterBlockingClient private[scredis] (
           case None =>
             refresh(deadline)
             if (cluster.masterOf(slot).isEmpty) {
-              if (expired(deadline)) result = Some(Failure(new TimeoutException(s"No master for slot $slot")))
+              if (expired(deadline)) result = Some(Failure(new RedisNotSentException(
+                s"No master for slot $slot", cluster.health.slotAvailability(slot)
+              )))
               else { failures += 1; pause(backoff(failures), deadline) }
             }
           case Some(server) =>
@@ -133,13 +137,14 @@ final class ClusterBlockingClient private[scredis] (
                 pause(backoff(failures), deadline)
                 refresh(deadline)
                 attempt = request.copyForResend()
-              case Failure(e: TimeoutException) =>
-                discard(server)
-                result = Some(Failure(e))
               case Failure(e) if retryable(e) || isMoved(e) =>
                 // the deadline has passed
                 discard(server)
-                result = Some(Failure(new TimeoutException(s"Blocking call $request timed out after $e")))
+                val message = s"Blocking call $request timed out after $e"
+                result = Some(Failure(e match {
+                  case _: RedisOutcomeUnknownException => new RedisOutcomeUnknownException(message, cluster.health.slotAvailability(slot), e)
+                  case _ => new RedisNotSentException(message, cluster.health.slotAvailability(slot), e)
+                }))
               case other =>
                 result = Some(other)
             }
@@ -164,6 +169,13 @@ final class ClusterBlockingClient private[scredis] (
 
   private def backoff(failures: Int): FiniteDuration =
     math.min(maxBackoff.toMillis, minBackoff.toMillis * (1L << math.min(failures - 1, 30))).millis
+
+  /**
+   * The health of the blocking connection to each node that a call has been made to so far.
+   *
+   * @since 1.1.0
+   */
+  def health: Map[Server, ConnectionHealth] = synchronized(clients.map { case (server, client) => server -> client.health })
 
   /** Closes the blocking connections (QUIT, without waiting for calls that block) */
   private[scredis] def close(): Unit = synchronized {
