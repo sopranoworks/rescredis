@@ -36,7 +36,7 @@ stream commands in 1.1.0.
 
 Changes:
 
-* 1.1.0 (in development, `1.1.0-SNAPSHOT`): stream commands `XADD`, `XLEN`, `XRANGE`, `XREVRANGE`, `XDEL`,
+* 1.1.0 (released 2026-11-08): stream commands `XADD`, `XLEN`, `XRANGE`, `XREVRANGE`, `XDEL`,
   `XTRIM`, `XREAD` and `XREAD ... BLOCK` (see "Streams"); consumer groups are not included yet. Fix (inherited
   from scredis): after a connection died, a reply could complete another request, or a request never completed,
   on `Client`, `Redis`, their blocking and subscriber clients, and `RedisCluster` (see "Connections").
@@ -85,8 +85,8 @@ Changes:
 ### Binaries
 
 ```scala
-libraryDependencies += "com.sopranoworks" %% "rescredis" % "1.0.0"        // Akka
-libraryDependencies += "com.sopranoworks" %% "rescredis-pekko" % "1.0.0"  // Apache Pekko
+libraryDependencies += "com.sopranoworks" %% "rescredis" % "1.1.0"        // Akka
+libraryDependencies += "com.sopranoworks" %% "rescredis-pekko" % "1.1.0"  // Apache Pekko
 ```
 
 ### Migrating from scredis
@@ -556,7 +556,7 @@ that exist only in the Akka or only in the Pekko variant. Fixes go into the Akka
 
 The API documentation is the `-javadoc.jar` published with each artifact. javadoc.io serves published
 javadoc jars at `https://javadoc.io/doc/<groupId>/<artifactId>/<version>`, so for the Akka artifact on Scala 2.13
-it would be `https://javadoc.io/doc/com.sopranoworks/rescredis_2.13/1.0.0` (and `rescredis-pekko_2.13` for
+it would be `https://javadoc.io/doc/com.sopranoworks/rescredis_2.13/1.1.0` (and `rescredis-pekko_2.13` for
 Pekko); I have not checked that it is available.
 
 The guide sources are in `src/main/paradox` (upstream's guide for scredis 2.4.3, whose API rescredis has) and
