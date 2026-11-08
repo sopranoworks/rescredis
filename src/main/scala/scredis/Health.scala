@@ -22,7 +22,11 @@ sealed trait ConnectionState
 /** @since 1.1.0 */
 object ConnectionState {
 
-  /** Connected and initialised (AUTH, SELECT and CLIENT SETNAME, as configured, have been answered) */
+  /**
+   * Connected and initialised (AUTH, SELECT and CLIENT SETNAME, as configured, have been answered; without them, a
+   * PING of the client's own). The requests of a new connection are sent only after that, so none is answered
+   * before the state is Connected.
+   */
   case object Connected extends ConnectionState
 
   /**

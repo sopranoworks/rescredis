@@ -168,7 +168,9 @@ it. On a replica Redis answers an error. For `RedisCluster` see "Cluster".
 node's connection of `RedisCluster`, the connections of `RedisCluster.blockingClient`) has a `health`: its `state`, one of
 `ConnectionState.Connected` (connected and initialised: `AUTH`, `SELECT` and `CLIENT SETNAME`, as configured, have
 been answered; without them, a `PING`), `Reconnecting(attempt, since, lastCause)` (the first connection is
-attempt 1 with the cause "not connected yet") and `Closed` (after `QUIT`). `health.subscribe(listener)` calls the
+attempt 1 with the cause "not connected yet") and `Closed` (after `QUIT`). The requests given to a new connection
+are sent once it is initialised, so a caller never has an answer on a connection whose health is not yet `Connected`;
+without initialisation requests they wait for the reply to that `PING` (one round trip). `health.subscribe(listener)` calls the
 listener with the current state, then with every change, in order, on a thread of rescredis (it must not block),
 and returns a `HealthSubscription` to `cancel()`; a function rather than an actor event stream, so that it is the
 same on both artifacts and needs no actor. While nothing is outstanding on a connection and nothing has been sent

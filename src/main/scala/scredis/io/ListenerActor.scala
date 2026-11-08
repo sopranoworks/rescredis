@@ -1,8 +1,9 @@
 // Modified by Sopranoworks: fixes backported from upstream scredis (05592f8, 5debcf4); adapted to Redis 7.4 (auth); credentials kept only once accepted, clearCredentials;
 // every request is completed by this actor only, by its reply or by the end of the connection it was sent on (messages and data of an
 // earlier connection are ignored); reconnect with a backoff, state changes logged once; the receive timeout covers every outstanding request;
-// the connection's health (state, availability), a PING to learn that Redis answers on a new connection without initialisation requests, an
-// idle PING; requests that fail because of the connection fail as not sent or as outcome unknown; ConnectNow (the next attempt at once);
+// the connection's health (state, availability), a PING as the initialisation of a new connection without initialisation requests (the
+// health is Connected before the queued requests are sent), an idle PING; requests that fail because of the connection fail as not sent or
+// as outcome unknown; ConnectNow (the next attempt at once);
 // DeadlinePassed (a blocking call whose deadline passed: its request taken out of the queue and failed as not sent when it was not written,
 // else the connection replaced); the end of a connection is handled once the replies received on it have reached their requests
 // (whenDecoded); QUIT completes when its connection has ended, and closes the client when it waited for a connection that could not be made;
@@ -28,7 +29,6 @@ import scredis.util.UniqueNameGenerator
 import scala.collection.mutable.ListBuffer
 import scala.concurrent.Future
 import scala.concurrent.duration._
-import scala.util.{Failure, Success}
 import scredis.Transaction._
 
 class ListenerActor(
@@ -391,8 +391,6 @@ class ListenerActor(
   }
   
   protected def always: Receive = {
-    case ProbeAnswered(number) =>
-      if (number == connectionNumber) connectedAndInitialized()
     case CredentialsAccepted(credentials) =>
       authOpt = Some(credentials)
     case ClearCredentials =>
@@ -489,7 +487,7 @@ class ListenerActor(
     closeConnection("receive timeout")
   }
 
-  /** Redis has answered the initialisation of the current connection (or the PING made instead) */
+  /** Redis has answered the initialisation of the current connection (or the PING made instead): before any queued request is sent */
   private def connectedAndInitialized(): Unit = {
     healthAttempt = 0
     health.connected()
@@ -516,15 +514,6 @@ class ListenerActor(
     send(ping)
     context.system.scheduler.scheduleOnce(idlePingTimeout, self, PingTimedOut(connectionNumber, pingNumber))
     ping
-  }
-
-  /** Redis answers on the new connection (no initialisation request to tell it): a PING, then the connection is up */
-  private def probe(): Unit = {
-    val number = connectionNumber
-    sendPing().future.onComplete {
-      case Failure(_: RedisIOException) =>
-      case _ => self ! ProbeAnswered(number)
-    }
   }
 
   private def scheduleIdleTick(): Unit = idlePingIntervalOpt.foreach { interval =>
@@ -692,22 +681,18 @@ class ListenerActor(
           authRequestOpt, selectRequestOpt, setNameRequestOpt
         ).flatten
 
-        initializationRequestsCount = requests.size
-
-        if (initializationRequestsCount > 0) {
+        // Without initialisation requests a PING of this actor's own is the initialisation: the connection is up (its
+        // health Connected) once Redis has answered it, and only then are the queued requests sent, so that no caller
+        // has an answer while the health still says the connection is not up. The first requests of a new connection
+        // wait for that round trip.
+        if (requests.nonEmpty) {
+          initializationRequestsCount = requests.size
           send(requests: _*)
-          become(initializing)
         } else {
-          probe()
-          onInitialized()
-          sendAllQueuedRequests()
-          if (isShuttingDown) {
-            become(shuttingDown)
-          } else {
-            scheduleIdleTick()
-            become(initialized)
-          }
+          initializationRequestsCount = 1
+          sendPing()
         }
+        become(initializing)
 
         // without a stack trace; a failure because the connection was lost is logged as the connection's state
         authFuture.failed.foreach {
@@ -749,6 +734,11 @@ class ListenerActor(
         }
       }
     case ReceiveTimedOut(number) if number == connectionNumber => handleReceiveTimeout()
+    // the PING made as the initialisation
+    case PingTimedOut(number, ping) if number == connectionNumber && ping == pingNumber &&
+      pingOpt.exists(!_.future.isCompleted) =>
+      log.warning(s"No reply to PING from $remote within $idlePingTimeout; closing the connection")
+      closeConnection(s"no reply to PING within $idlePingTimeout")
     case Terminated(ref) if isIOActor(ref) => whenDecoded {
       health.reconnecting(healthAttempt, lastCause, waiting = false)
       if (!closedByQueuedQuit()) {
@@ -818,7 +808,6 @@ object ListenerActor {
   private case class ReconnectNow(connectionNumber: Int)
   private case class IdleTick(connectionNumber: Int)
   private case class PingTimedOut(connectionNumber: Int, ping: Int)
-  private case class ProbeAnswered(connectionNumber: Int)
   private case object QueueTick
   /** The server accepted an `AUTH` with these credentials. */
   case class CredentialsAccepted(credentials: AuthConfig)
